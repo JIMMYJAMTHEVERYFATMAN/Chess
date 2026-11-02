@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
+import app_updater
 from offline_chess import telemetry
 
 
@@ -31,6 +32,40 @@ class TelemetryRouteTests(unittest.TestCase):
         with patch.object(telemetry, "USAGE_REPORT_URL", "https://collector.example"):
             with self.assertRaises(ValueError):
                 telemetry.post_usage_event("other", {})
+
+    def test_launch_checkin_runs_before_update_request(self):
+        events = []
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = b'{"draft":true}'
+
+        def post(path, payload):
+            events.append((path, payload))
+
+        def request(url):
+            events.append(("update", url))
+            return response
+
+        payload = {"install_id": "a-real-payload"}
+        worker = app_updater.UpdateCheckWorker("0.10.4", payload)
+        with patch.object(app_updater, "post_usage_event", side_effect=post), \
+             patch.object(app_updater, "_request", side_effect=request):
+            worker.run()
+
+        self.assertEqual(events, [
+            ("checkin", payload), ("update", app_updater.LATEST_RELEASE_URL),
+        ])
+
+    def test_failed_launch_checkin_does_not_skip_update_request(self):
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = b'{"draft":true}'
+        worker = app_updater.UpdateCheckWorker("0.10.4", {"install_id": "a-real-payload"})
+        with patch.object(app_updater, "post_usage_event", side_effect=OSError("offline")), \
+             patch.object(app_updater, "_request", return_value=response) as request:
+            worker.run()
+
+        request.assert_called_once_with(app_updater.LATEST_RELEASE_URL)
 
 
 if __name__ == "__main__":
