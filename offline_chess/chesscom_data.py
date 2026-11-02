@@ -30,6 +30,7 @@ from .review_logic import (
     REVIEW_ANALYSIS_VERSION,
     VALUES,
     calibrate_accuracy,
+    game_phase,
     raw_move_accuracy,
 )
 
@@ -123,7 +124,10 @@ def chesscom_game_identifier(game):
 
 def validate_chesscom_archive_url(value: str) -> str:
     parsed=urllib.parse.urlparse(str(value))
-    if (parsed.scheme!="https" or parsed.hostname!="api.chess.com"
+    try:port=parsed.port
+    except ValueError:port=-1
+    if (parsed.scheme!="https" or parsed.hostname!="api.chess.com" or port not in (None,443)
+            or parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment
             or not re.fullmatch(r"/pub/player/[A-Za-z0-9_-]+/games/\d{4}/(?:0[1-9]|1[0-2])/?",parsed.path)):
         raise ValueError("Chess.com supplied an invalid archive address.")
     return str(value)
@@ -131,7 +135,10 @@ def validate_chesscom_archive_url(value: str) -> str:
 
 def validate_chesscom_country_url(value: str) -> str:
     parsed=urllib.parse.urlparse(str(value))
-    if (parsed.scheme!="https" or parsed.hostname!="api.chess.com"
+    try:port=parsed.port
+    except ValueError:port=-1
+    if (parsed.scheme!="https" or parsed.hostname!="api.chess.com" or port not in (None,443)
+            or parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment
             or not re.fullmatch(r"/pub/country/[A-Za-z]{2}/?",parsed.path)):
         raise ValueError("Chess.com supplied an invalid country address.")
     return str(value)
@@ -291,6 +298,7 @@ class ChessComCastlingScanWorker(QThread):
                 with path.open("r",encoding="utf-8-sig") as source:
                     game=chess.pgn.read_game(source)
                 if game is None:raise ValueError("PGN contains no game")
+                if game.errors:raise ValueError(f"PGN contains invalid moves: {game.errors[0]}")
                 board=game.board()
                 for ply,move in enumerate(game.mainline_moves(),1):
                     if board.is_castling(move):
@@ -450,6 +458,7 @@ class ProfileStore:
         black_result=game.get("black",{}).get("result","") if isinstance(game.get("black"),dict) else ""
         pgn_game=chess.pgn.read_game(io.StringIO(game["pgn"]))
         if pgn_game is None:raise ValueError("The downloaded PGN could not be parsed.")
+        if pgn_game.errors:raise ValueError(f"The downloaded PGN contains invalid moves: {pgn_game.errors[0]}")
         board=pgn_game.board()
         for move in pgn_game.mainline_moves():
             if move not in board.legal_moves:raise ValueError("The downloaded PGN contains an illegal move.")
@@ -638,6 +647,7 @@ def prepare_chesscom_pgn(record):
     pgn_text=Path(record["pgn_path"]).read_text(encoding="utf-8-sig")
     game=chess.pgn.read_game(io.StringIO(pgn_text))
     if game is None:raise ValueError("The saved Chess.com PGN could not be read.")
+    if game.errors:raise ValueError(f"The saved Chess.com PGN contains invalid moves: {game.errors[0]}")
     game.headers["OfflineChessUserColor"]=record["user_color"]
     game.headers["OfflineChessPlayedLocally"]="0"
     try:game.headers["Date"]=datetime.fromisoformat(record["played_at"]).strftime("%Y.%m.%d")

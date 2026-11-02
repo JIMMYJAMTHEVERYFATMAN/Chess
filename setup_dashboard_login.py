@@ -29,9 +29,9 @@ def main() -> int:
     if destination.exists() and input(f"Replace the existing dashboard password at {destination}? [y/N] ").strip().lower() != "y":
         print("Password unchanged.")
         return 1
-    password = getpass.getpass("Choose a dashboard password (at least 12 characters): ")
-    if len(password) < 12:
-        print("Use at least 12 characters.", file=sys.stderr)
+    password = getpass.getpass("Choose a dashboard password (12 to 1,024 characters): ")
+    if not 12 <= len(password) <= 1024:
+        print("Use 12 to 1,024 characters.", file=sys.stderr)
         return 2
     confirm = getpass.getpass("Confirm dashboard password: ")
     if not secrets.compare_digest(password.encode("utf-8"), confirm.encode("utf-8")):

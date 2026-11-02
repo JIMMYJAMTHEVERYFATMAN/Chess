@@ -120,7 +120,7 @@ def local_opening_exit_depth(pgn_path, user_color, book_positions):
     try:
         with Path(pgn_path).open("r", encoding="utf-8-sig") as source:
             game = chess.pgn.read_game(source)
-        if game is None or game.board().chess960:
+        if game is None or game.errors or game.board().chess960:
             return None
         board = game.board()
         user_book_moves = 0

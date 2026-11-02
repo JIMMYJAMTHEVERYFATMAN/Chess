@@ -1078,7 +1078,7 @@ class ChessWindow(QMainWindow):
                 for record in self.profile_store.games()[:12]:
                     if not record.get("pgn"):continue
                     game=chess.pgn.read_game(io.StringIO(record["pgn"]))
-                    if game is not None:collect(game.board(),list(game.mainline_moves()))
+                    if game is not None and not game.errors:collect(game.board(),list(game.mainline_moves()))
             except Exception as exc:self.statusBar().showMessage(f"Some saved games could not be searched for puzzles: {exc}",6000)
         if len(positions)>80:positions=random.sample(positions,80)
         return positions
@@ -1420,6 +1420,7 @@ class ChessWindow(QMainWindow):
                 pgn_text=saved_game;review_json=None
             game=chess.pgn.read_game(io.StringIO(pgn_text))
             if game is None:raise ValueError("Saved PGN could not be read")
+            if game.errors:raise ValueError(f"Saved PGN contains invalid moves: {game.errors[0]}")
             moves=list(game.mainline_moves());board=game.board();start_board=board.copy(stack=False)
             review_ply=(saved_game.get("review_ply") if isinstance(saved_game,dict) else None)
             try:self._chesscom_review_start_ply=max(1,min(len(moves),int(review_ply))) if review_ply is not None and moves else None
@@ -1508,6 +1509,7 @@ class ChessWindow(QMainWindow):
         try:
             with open(path,"r",encoding="utf-8-sig") as handle: game=chess.pgn.read_game(handle)
             if game is None:raise ValueError("No game was found in this PGN")
+            if game.errors:raise ValueError(f"PGN contains invalid moves: {game.errors[0]}")
             moves=list(game.mainline_moves()); board=game.board();start_board=board.copy(stack=False)
             for move in moves:
                 if move not in board.legal_moves:raise ValueError("PGN contains an illegal move")

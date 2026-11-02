@@ -19,6 +19,8 @@ HOST, PORT = "127.0.0.1", 8765
 SESSION_SECONDS = 12 * 60 * 60
 LOGIN_WINDOW_SECONDS = 15 * 60
 LOGIN_MAX_FAILURES = 5
+MAX_LOGIN_REQUEST_BYTES = 16_384
+MAX_LOGIN_PASSWORD_CHARS = 1024
 _sessions: dict[str, float] = {}
 _failed_logins: dict[str, tuple[int, float]] = {}
 
@@ -123,14 +125,14 @@ class _DashboardHandler(BaseHTTPRequestHandler):
                 length = int(self.headers.get("Content-Length", "0"))
             except ValueError:
                 length = 0
-            if length <= 0 or length > 2048:
+            if length <= 0 or length > MAX_LOGIN_REQUEST_BYTES:
                 return self._send(400, "application/json; charset=utf-8", b'{"error":"Invalid login request."}')
             try:
                 body = json.loads(self.rfile.read(length).decode("utf-8"))
             except (UnicodeError, ValueError):
                 return self._send(400, "application/json; charset=utf-8", b'{"error":"Invalid login request."}')
             password = body.get("password") if isinstance(body, dict) else None
-            if not isinstance(password, str) or not 1 <= len(password) <= 1024:
+            if not isinstance(password, str) or not 1 <= len(password) <= MAX_LOGIN_PASSWORD_CHARS:
                 return self._send(400, "application/json; charset=utf-8", b'{"error":"Enter your dashboard password."}')
             record = _load_password_record()
             if record is None:
@@ -140,7 +142,11 @@ class _DashboardHandler(BaseHTTPRequestHandler):
             failures, expiry = _failed_logins.get(peer, (0, 0.0))
             if expiry > now and failures >= LOGIN_MAX_FAILURES:
                 return self._send(429, "application/json; charset=utf-8", b'{"error":"Too many attempts. Try again in 15 minutes."}')
-            candidate = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), record["salt"], record["iterations"])
+            try:
+                password_bytes = password.encode("utf-8")
+            except UnicodeEncodeError:
+                return self._send(400, "application/json; charset=utf-8", b'{"error":"Enter a valid dashboard password."}')
+            candidate = hashlib.pbkdf2_hmac("sha256", password_bytes, record["salt"], record["iterations"])
             if not hmac.compare_digest(candidate, record["digest"]):
                 if expiry <= now:
                     failures, expiry = 0, now + LOGIN_WINDOW_SECONDS
