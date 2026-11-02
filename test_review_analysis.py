@@ -13,7 +13,7 @@ os.environ.setdefault("QT_QPA_PLATFORM","offscreen")
 try:
     import chess
     from PyQt6.QtCore import QEvent, Qt
-    from PyQt6.QtGui import QKeyEvent
+    from PyQt6.QtGui import QImage, QKeyEvent, QPainter
     from main import (
         analyze_review_events,
         removed_defender_event,
@@ -60,6 +60,7 @@ try:
         rank_review_moments,
         review_moment_tags,
         QApplication,
+        ChessBoard,
         ChessWindow,
         BOARD_THEMES,
         PIECE_STYLES,
@@ -91,6 +92,15 @@ def play(board, san):
 
 @unittest.skipIf(TEST_IMPORT_ERROR is not None,f"App review dependencies unavailable: {TEST_IMPORT_ERROR}")
 class ReviewAnalysisTests(unittest.TestCase):
+    def test_chess_board_renders_initial_position(self):
+        app=QApplication.instance() or QApplication([])
+        board=ChessBoard();board.resize(640,640)
+        image=QImage(640,640,QImage.Format.Format_ARGB32);image.fill(0)
+        painter=QPainter(image)
+        try:board.render(painter)
+        finally:painter.end()
+        self.assertEqual(image.pixelColor(40,40).alpha(),255)
+
     def test_chesscom_eco_codes_display_readable_opening_names(self):
         self.assertEqual(chesscom_opening_label("A02"),"Bird Opening · A02")
         self.assertEqual(chesscom_opening_label("","C20","https://www.chess.com/openings/Kings-Pawn-Game"),

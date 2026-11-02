@@ -14,6 +14,8 @@ from urllib.request import Request, urlopen
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from offline_chess.telemetry import post_usage_event
+
 
 REPOSITORY = "JIMMYJAMTHEVERYFATMAN/Chess"
 LATEST_RELEASE_URL = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
@@ -44,11 +46,18 @@ def _request(url: str):
 class UpdateCheckWorker(QThread):
     update_available = pyqtSignal(object)
 
-    def __init__(self, current_version: str, parent=None):
+    def __init__(self, current_version: str, checkin_payload: dict | None = None, parent=None):
         super().__init__(parent)
         self.current_version = current_version
+        self.checkin_payload = checkin_payload
 
     def run(self):
+        if self.checkin_payload:
+            try:
+                post_usage_event("checkin", self.checkin_payload)
+            except Exception:
+                # Reporting must never stop the independent update check.
+                pass
         try:
             with _request(LATEST_RELEASE_URL) as response:
                 release = json.loads(response.read().decode("utf-8"))

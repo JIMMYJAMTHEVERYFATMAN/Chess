@@ -1,16 +1,16 @@
 # Offline Chess
 
-A local chess analysis app built with PyQt6, `python-chess`, and Stockfish. Games and profile data stay on this computer unless you choose to fetch public game archives from Chess.com.
+A local chess analysis app built with PyQt6, `python-chess`, and Stockfish. Game records and PGNs stay on this computer. With reporting enabled, the app sends an installation check-in containing a random install ID, app version, last-seen time, and saved Chess.com username. You can turn check-ins off in **Profile → Overview**. Bug reports and feature suggestions are sent only when you submit them. Neither feature sends game history or PGNs.
 
 ## Run the app
 
-Requirements: Python 3.10 or newer, PyQt6, `python-chess`, and a Stockfish 19 compatible engine.
+Requirements: Python 3.10 or newer, PyQt6, `python-chess`, `cryptography`, and a Stockfish 19 compatible engine.
 
 ```powershell
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-python -m pip install PyQt6 python-chess
+python -m pip install -r requirements.txt
 python main.py
 ```
 
@@ -18,12 +18,31 @@ The app looks for `stockfish.exe` beside `main.py`. Set the `STOCKFISH_PATH` env
 
 ## Codebase map
 
-Most of the application currently lives in `main.py`, which contains the PyQt interface, chessboard and game controls, Stockfish review logic, opening lookup, profile storage and dashboards, and Chess.com archive integration. The updater is kept separate in `app_updater.py`.
+`main.py` is the startup and compatibility entry point. Application features are split into focused modules under `offline_chess/`:
 
 ```text
 .
-├── main.py                       # Application UI and chess/review/profile logic
+├── main.py                       # Startup and compatibility exports
+├── offline_chess/
+│   ├── config.py                 # Version, runtime paths, and shared settings
+│   ├── openings.py               # Lichess opening catalog lookup
+│   ├── review_logic.py           # Review models, scoring, tactics, and coaching
+│   ├── engine_worker.py          # Stockfish process and analysis worker
+│   ├── chesscom_data.py          # Chess.com API, PGN storage, and profile data
+│   └── ui/
+│       ├── main_window.py        # Main application window
+│       ├── profile_dialog.py     # Profile, dashboard, and Chess.com controls
+│       ├── review_dialogs.py     # Game review and coaching dialogs
+│       ├── board.py              # Chessboard presentation and interaction
+│       ├── charts.py             # Profile charts
+│       ├── theme.py              # Board themes and piece styles
+│       └── common.py             # Shared UI helpers
 ├── app_updater.py                # GitHub release checks, downloads, checksum verification, and install
+├── dashboard_server.py           # Loopback-only private telemetry dashboard
+├── generate_dashboard_keys.py    # Owner-held RSA keypair setup
+├── setup_dashboard_login.py      # Local-only dashboard password setup
+├── tools/
+│   └── collect_third_party_licenses.py # Release dependency license and SBOM inventory
 ├── openings/                     # Lichess opening catalog (a.tsv through e.tsv)
 ├── stockfish.exe                 # Local development engine; release builds fetch a verified copy
 ├── test_review_analysis.py        # Unit tests for review and profile analysis
@@ -39,11 +58,23 @@ Most of the application currently lives in `main.py`, which contains the PyQt in
 
 Tagged releases build a single `OfflineChess.exe` that includes Stockfish and the Lichess opening database. The app checks the public GitHub Releases page in the background when it starts. If a newer release is available, it offers to download and install it, verifies the published SHA-256 checksum, then restarts with the new version. Run the EXE from a folder your Windows account can write to, such as Downloads or a folder under your user profile.
 
-To publish a release, update `APP_VERSION` in `main.py`, commit the change, create the matching tag (for example `v0.10.1`), and push the tag. GitHub Actions builds and publishes the EXE and checksum. The release tag must match `APP_VERSION`.
+To publish a release, update `APP_VERSION` in `offline_chess/config.py`, commit the change, create the matching tag (for example `v0.10.3`), and push the tag. GitHub Actions runs the test suite, builds and publishes the EXE and checksum, license notices, and the corresponding Stockfish source and network files. The release tag must match `APP_VERSION`.
 
-The one-file build extracts its engine and opening database into a temporary folder while it runs. Profiles and downloaded games remain in the user's local application data folder, outside the EXE.
+To build locally on Windows after installing the runtime dependencies, run `python -m PyInstaller --noconfirm --clean OfflineChess.spec`. The one-file build extracts its engine and opening database into a temporary folder while it runs. Profiles and downloaded games remain in the user's local application data folder, outside the EXE.
 
 Opening names use the [Lichess chess-openings](https://github.com/lichess-org/chess-openings) TSV files in `openings/` (`a.tsv` through `e.tsv`). The profile shows the opening name and its ECO code together, for example `Bird Opening · A02`.
+
+## Licensing, attribution, and privacy
+
+Offline Chess source is licensed under GNU GPL v3 only; see [`LICENSE`](LICENSE). The direct dependencies and bundled data are described in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), including the Lichess openings dataset's CC0 dedication and Stockfish's GPL license and source requirements. Windows releases include these notices and the matching Stockfish source/network files. The app's PyQt6 use means the project must remain under a GPL-compatible license unless a separate commercial PyQt license is obtained. These notices document the current build; they are not legal advice or a guarantee against legal claims.
+
+Reporting check-ins are on by default after a first-run disclosure and can be disabled at any time in **Profile → Overview**. The app database and encrypted event files contain no IP-address field, game record, or PGN telemetry. The hosting provider necessarily processes network connection information to serve public requests; the collector uses the connection address transiently for in-memory abuse limits and does not write it to the repository. Check-ins and feedback are encrypted by the collector with AES-256-GCM; event keys are wrapped to the dashboard owner's RSA public key before the encrypted files are written to a private Git repository. The local dashboard decrypts them with the matching private key and refreshes the repository on each page load. No retention or automatic deletion period is configured; delete records from the private repository when you want to remove them.
+
+### Owner usage dashboard
+
+The maintainer dashboard is a read-only webpage served on this computer at `http://127.0.0.1:8765`. It reads event files from a local clone of the private telemetry repository. Generate a dashboard keypair with `python generate_dashboard_keys.py`; keep the private key outside Git, and configure the printed public key as `TELEMETRY_PUBLIC_KEY` in the collector. Configure the collector's server-only GitHub token with Contents write access to the private data repository, plus its `DATA_REPOSITORY` and `DATA_BRANCH` settings. After deploying the collector, set the app repository's Actions variable `OFFLINE_CHESS_CHECKIN_URL` to its HTTPS URL. The release workflow embeds that public URL into the packaged app; local runs can override it through the environment.
+
+For local dashboard access, install the dashboard dependency with `python -m pip install -r requirements.txt`, copy `.env.example` to `.env`, set `OFFLINE_CHESS_DASHBOARD_PRIVATE_KEY` to the generated private PEM and `OFFLINE_CHESS_DATA_REPO` to the local clone path, then run `python setup_dashboard_login.py` to choose a local password. The password hash is stored under app data; sign-in sessions expire after 12 hours. Start the page with `python dashboard_server.py`. The dashboard binds only to loopback. Git must be installed and the clone must be able to fast-forward from the private repository. Keep the private key and GitHub write token secret; the desktop app receives neither.
 
 ## Board appearance
 

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Offline Chess · Local Usage</title>
+  <style>
+    :root{font-family:Inter,Segoe UI,Arial,sans-serif;color:#202b24;background:#f4f6f3}
+    *{box-sizing:border-box}body{margin:0}.shell{max-width:1180px;margin:auto;padding:30px 22px 48px}
+    header{display:flex;align-items:center;gap:14px;border-bottom:1px solid #dce3dd;padding-bottom:20px}
+    .mark{height:42px;width:42px;display:grid;place-items:center;background:#183c32;color:#fff;border-radius:13px;font-size:22px}
+    h1{margin:0;font-size:21px;letter-spacing:-.03em}header p{margin:5px 0 0;color:#708077;font-size:12px}
+    button{margin-left:auto;padding:10px 14px;border:1px solid #d6dfd8;border-radius:9px;background:#fff;color:#315a49;font-weight:700;cursor:pointer}
+    .summary{display:grid;grid-template-columns:repeat(3,1fr);gap:13px;margin:24px 0}
+    .metric,.panel,.feedback{background:#fff;border:1px solid #e2e8e3;border-radius:13px;box-shadow:0 4px 18px #19352108}
+    .metric{padding:17px 19px}.metric span{display:block;font-size:12px;color:#738078}.metric strong{display:block;margin:8px 0 2px;font-size:29px}
+    .tabs{display:flex;gap:22px;border-bottom:1px solid #dfe5e0;margin-top:28px}.tabs button{margin:0;background:none;border:0;border-bottom:2px solid transparent;padding:0 0 11px;color:#758079}
+    .tabs button.active{color:#315a49;border-color:#477960}.panel{margin-top:17px;overflow:hidden}.panel-title{padding:18px 20px}
+    .panel-title h2{margin:0 0 4px;font-size:15px}.panel-title p,.note{font-size:11px;color:#7f8a83;margin:0}
+    .scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;text-align:left}th{background:#f8faf8;color:#79857e;text-transform:uppercase;font-size:10px;letter-spacing:.06em}
+    th,td{padding:13px 18px;border-top:1px solid #eff2ef;font-size:12px;vertical-align:top}code{font-family:Consolas,monospace;font-size:10px;overflow-wrap:anywhere;color:#607067}
+    .muted{color:#9aa39d}.version{background:#edf4ef;color:#456e51;border-radius:20px;padding:4px 8px;font-weight:700;font-size:10px}
+    .feedback-list{display:grid;gap:11px;margin-top:17px}.feedback{padding:17px 19px}.feedback header{padding:0;border:0;justify-content:space-between}
+    .tag{font-size:10px;font-weight:700;border-radius:20px;padding:5px 9px;background:#eff2f1;margin-right:6px}.tag.bug{background:#fff1ed;color:#a94b33}.tag.feature{background:#eef0ff;color:#47589d}
+    .feedback time{font-size:10px;color:#87918a}.message{font-size:13px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;margin:15px 0}
+    .meta{border-top:1px solid #eff2ef;padding-top:10px;color:#87918a;font-size:10px}.empty,.error{padding:28px;color:#849087;text-align:center;font-size:12px}.error{color:#a44936}
+    .note{margin:19px auto 0;max-width:850px;text-align:center;line-height:1.6}
+    .hidden{display:none!important}.login{max-width:440px;margin:13vh auto 0;background:#fff;border:1px solid #e2e8e3;border-radius:16px;padding:28px;box-shadow:0 8px 32px #19352110}.login h1{font-size:21px}.login p{font-size:13px;line-height:1.6;color:#738078}.login label{display:block;margin:20px 0 7px;font-size:12px;font-weight:700}.login input{width:100%;padding:12px;border:1px solid #cfd9d1;border-radius:8px;font-size:15px}.login button{margin:14px 0 0;background:#183c32;color:#fff;border:0}.login-error{min-height:18px;color:#a44936!important;font-size:12px!important}.head-actions{display:flex;gap:8px;margin-left:auto}.head-actions button{margin:0}
+    @media(max-width:620px){.shell{padding:20px 13px}.summary{grid-template-columns:1fr}.feedback header{align-items:flex-start}}
+  </style>
+</head>
+<body><main class="shell">
+  <section id="loginPanel" class="login" aria-labelledby="loginTitle">
+    <div class="mark">♞</div><h1 id="loginTitle">Offline Chess dashboard</h1>
+    <p>Sign in with your local dashboard password to view installations and feedback.</p>
+    <form id="loginForm"><label for="password">Dashboard password</label><input id="password" name="password" type="password" autocomplete="current-password" required><button type="submit">Sign in</button></form>
+    <p id="loginError" class="login-error" role="alert"></p>
+  </section>
+  <div id="dashboard" class="hidden">
+  <header><div class="mark">♞</div><div><h1>Offline Chess · Local usage</h1><p>Private encrypted event repository · localhost only</p></div><div class="head-actions"><button id="logout">Sign out</button><button id="refresh">↻ Refresh</button></div></header>
+  <section class="summary"><div class="metric"><span>Total installations</span><strong id="total">—</strong></div><div class="metric"><span>Active this week</span><strong id="active">—</strong></div><div class="metric"><span>Feedback items</span><strong id="reports">—</strong></div></section>
+  <nav class="tabs"><button id="instTab" class="active">Installations</button><button id="feedbackTab">Feedback</button></nav>
+  <section class="panel"><div class="panel-title"><h2 id="title">Installations</h2><p id="subtitle">Install ID, Chess.com username, app version, and most recent launch check-in.</p></div><div id="table" class="scroll"></div></section>
+  <p class="note">The app sends check-ins at launch alongside its update check. Reports and ideas are sent only when submitted. Event records in the private Git repository use AES-256-GCM encryption; this page decrypts them locally with your .env key.</p>
+  </div>
+</main>
+<script>
+const esc=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+let data={installations:[],feedback:[]},tab="installations";
+function ago(v){const s=Math.max(0,Math.floor((Date.now()-new Date(v).getTime())/1000));if(s<60)return"just now";if(s<3600)return`${Math.floor(s/60)}m ago`;if(s<86400)return`${Math.floor(s/3600)}h ago`;return`${Math.floor(s/86400)}d ago`}
+function showLogin(message=""){document.getElementById("dashboard").classList.add("hidden");document.getElementById("loginPanel").classList.remove("hidden");document.getElementById("loginError").textContent=message;document.getElementById("password").focus()}
+function showDashboard(){document.getElementById("loginPanel").classList.add("hidden");document.getElementById("dashboard").classList.remove("hidden")}
+async function load(){const root=document.getElementById("table");root.innerHTML='<p class="empty">Reading encrypted database…</p>';try{const r=await fetch("/api/dashboard",{cache:"no-store",credentials:"same-origin"}),v=await r.json();if(r.status===401){showLogin();return}if(!r.ok)throw new Error(v.error||"Dashboard could not load.");data=v;showDashboard();render()}catch(e){showDashboard();root.innerHTML=`<p class="error">${esc(e.message)}</p>`}}
+function render(){const ins=data.installations||[],fb=data.feedback||[];document.getElementById("total").textContent=ins.length;document.getElementById("active").textContent=ins.filter(x=>Date.now()-new Date(x.last_seen).getTime()<7*86400000).length;document.getElementById("reports").textContent=fb.length;const root=document.getElementById("table");
+if(tab==="installations"){document.getElementById("title").textContent="Installations";document.getElementById("subtitle").textContent="Install ID, Chess.com username, app version, and most recent launch check-in.";if(!ins.length){root.innerHTML='<p class="empty">No check-ins yet.</p>';return}root.innerHTML=`<table><thead><tr><th>Install ID</th><th>Chess.com user</th><th>Version</th><th>Last seen</th></tr></thead><tbody>${ins.map(x=>`<tr><td><code>${esc(x.install_id)}</code></td><td>${x.chesscom_username?esc(x.chesscom_username):'<span class="muted">Not provided</span>'}</td><td><span class="version">v${esc(x.app_version)}</span></td><td title="${esc(x.last_seen)}">${esc(ago(x.last_seen))}</td></tr>`).join("")}</tbody></table>`;return}
+document.getElementById("title").textContent="Bug reports & ideas";document.getElementById("subtitle").textContent="Messages submitted in the app. The app does not attach PGNs.";if(!fb.length){root.innerHTML='<p class="empty">No feedback submitted yet.</p>';return}root.innerHTML=`<div class="feedback-list">${fb.map(x=>`<article class="feedback"><header><span class="tag ${x.category==='bug'?'bug':'feature'}">${x.category==='bug'?'Bug report':'Feature suggestion'}</span><time title="${esc(x.submitted_at)}">${esc(ago(x.submitted_at))}</time></header><p class="message">${esc(x.message)}</p><div class="meta">v${esc(x.app_version)} · ${esc(x.chesscom_username||'No Chess.com username')} · ${esc(x.install_id)}</div></article>`).join("")}</div>`}
+document.getElementById("loginForm").addEventListener("submit",async event=>{event.preventDefault();const input=document.getElementById("password"),button=event.currentTarget.querySelector("button");button.disabled=true;try{const r=await fetch("/api/login",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:input.value})}),v=await r.json();if(!r.ok)throw new Error(v.error||"Sign-in failed.");input.value="";document.getElementById("loginError").textContent="";await load()}catch(e){showLogin(e.message)}finally{button.disabled=false}});
+document.getElementById("logout").addEventListener("click",async()=>{await fetch("/api/logout",{method:"POST",credentials:"same-origin"});showLogin("You have signed out.")});
+document.getElementById("refresh").addEventListener("click",load);document.getElementById("instTab").addEventListener("click",()=>{tab="installations";document.getElementById("instTab").classList.add("active");document.getElementById("feedbackTab").classList.remove("active");render()});document.getElementById("feedbackTab").addEventListener("click",()=>{tab="feedback";document.getElementById("feedbackTab").classList.add("active");document.getElementById("instTab").classList.remove("active");render()});load();
+</script></body></html>
