@@ -132,7 +132,7 @@ class UpdateDownloadWorker(QThread):
 
 
 def launch_windows_update(downloaded_exe: str | Path, installed_exe: str | Path) -> None:
-    """Start a detached PowerShell helper that swaps the EXE after this app exits."""
+    """Start a detached helper to replace the EXE and reopen the app safely."""
     if os.name != "nt":
         raise OSError("Automatic installation is currently supported on Windows only.")
     source = Path(downloaded_exe).resolve()
@@ -141,24 +141,55 @@ def launch_windows_update(downloaded_exe: str | Path, installed_exe: str | Path)
         raise ValueError("The downloaded application file is missing or incomplete.")
     if not target.is_file():
         raise ValueError("Could not locate the currently running application.")
+    log_path = source.parent / "updater.log"
 
     def ps_quote(value: str) -> str:
         return "'" + value.replace("'", "''") + "'"
 
     script = "\n".join((
+        "$ErrorActionPreference = 'Stop'",
         f"$processToWait = {os.getpid()}",
         f"$source = {ps_quote(str(source))}",
         f"$target = {ps_quote(str(target))}",
+        f"$log = {ps_quote(str(log_path))}",
         "$next = $target + '.new'",
-        "while (Get-Process -Id $processToWait -ErrorAction SilentlyContinue) { Start-Sleep -Seconds 1 }",
-        "try {",
-        "  Copy-Item -LiteralPath $source -Destination $next -Force -ErrorAction Stop",
-        "  Move-Item -LiteralPath $next -Destination $target -Force -ErrorAction Stop",
-        "} catch {",
-        "  Remove-Item -LiteralPath $next -Force -ErrorAction SilentlyContinue",
+        "$backup = $target + '.previous'",
+        "function Write-UpdateLog($message) {",
+        "  try { Add-Content -LiteralPath $log -Value \"$(Get-Date -Format o) $message\" -ErrorAction Stop } catch {}",
         "}",
-        "Start-Process -FilePath $target",
-        "Remove-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue",
+        "Write-UpdateLog 'Updater started.'",
+        "try {",
+        "  $waited = 0",
+        "  while (Get-Process -Id $processToWait -ErrorAction SilentlyContinue) {",
+        "    if ($waited -ge 180) { throw 'The app process did not exit within 180 seconds.' }",
+        "    Start-Sleep -Seconds 1; $waited++",
+        "  }",
+        "  Copy-Item -LiteralPath $source -Destination $next -Force",
+        "  $sourceHash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash",
+        "  $nextHash = (Get-FileHash -LiteralPath $next -Algorithm SHA256).Hash",
+        "  if ($sourceHash -ne $nextHash) { throw 'The staged update failed its SHA-256 check.' }",
+        "  Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue",
+        "  Move-Item -LiteralPath $target -Destination $backup -Force",
+        "  Move-Item -LiteralPath $next -Destination $target -Force",
+        "  $installedHash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash",
+        "  if ($sourceHash -ne $installedHash) { throw 'The installed update failed its SHA-256 check.' }",
+        "  $started = Start-Process -FilePath $target -PassThru",
+        "  if (-not $started.WaitForInputIdle(15000)) { throw 'Updated app did not become ready within 15 seconds.' }",
+        "  Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue",
+        "  Remove-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue",
+        "  Write-UpdateLog 'Update installed and app reopened successfully.'",
+        "} catch {",
+        "  Write-UpdateLog \"Update failed: $_\"",
+        "  Remove-Item -LiteralPath $next -Force -ErrorAction SilentlyContinue",
+        "  if (Test-Path -LiteralPath $backup) {",
+        "    Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue",
+        "    Move-Item -LiteralPath $backup -Destination $target -Force -ErrorAction SilentlyContinue",
+        "  }",
+        "  if (Test-Path -LiteralPath $target) {",
+        "    try { Start-Process -FilePath $target -ErrorAction Stop; Write-UpdateLog 'Reopened the existing app after update failure.' }",
+        "    catch { Write-UpdateLog \"Could not reopen the existing app: $_\" }",
+        "  }",
+        "}",
     ))
     encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
