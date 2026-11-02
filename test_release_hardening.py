@@ -486,7 +486,7 @@ class ChessComImportEdgeTests(unittest.TestCase):
         previous = os.environ.get("LOCALAPPDATA")
         try:
             with tempfile.TemporaryDirectory(dir=os.getcwd()) as folder:
-                with patch.dict(os.environ, {"LOCALAPPDATA": folder}):
+                with patch.dict(os.environ, {"LOCALAPPDATA": folder, "XDG_DATA_HOME": folder}):
                     store = ProfileStore()
                     game_id = store.save_chesscom_game("player1", {
                         "url": "https://www.chess.com/game/live/scan-persistence",
@@ -516,7 +516,7 @@ class ChessComProfileUiEdgeTests(unittest.TestCase):
         previous = os.environ.get("LOCALAPPDATA")
         try:
             with tempfile.TemporaryDirectory(dir=os.getcwd()) as folder:
-                with patch.dict(os.environ, {"LOCALAPPDATA": folder}):
+                with patch.dict(os.environ, {"LOCALAPPDATA": folder, "XDG_DATA_HOME": folder}):
                     store = ProfileStore()
                     dialog = ProfileDialog(store, lambda _game: None)
                     games = [
@@ -561,7 +561,7 @@ class ChessComProfileUiEdgeTests(unittest.TestCase):
         previous = os.environ.get("LOCALAPPDATA")
         try:
             with tempfile.TemporaryDirectory(dir=os.getcwd()) as folder:
-                with patch.dict(os.environ, {"LOCALAPPDATA": folder}):
+                with patch.dict(os.environ, {"LOCALAPPDATA": folder, "XDG_DATA_HOME": folder}):
                     store = ProfileStore()
                     game = {
                         "url": "https://www.chess.com/game/live/invalid-pgn",
