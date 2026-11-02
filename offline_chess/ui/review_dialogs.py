@@ -159,75 +159,178 @@ class MistakePracticeDialog(QDialog):
         self.index+=1;self._load_position()
 
 
-class PuzzleDialog(QDialog):
+class PuzzleDialog(QWidget):
+    """Full-page puzzle studio shared by the five deterministic practice modes."""
     puzzle_requested=pyqtSignal(object)
-    def __init__(self,theme_key,parent=None):
-        super().__init__(parent);self.setWindowTitle("Offline Puzzles · Skill Practice");fit_dialog_to_screen(self,parent,1800,1250)
+    challenge_high_score_changed=pyqtSignal(int)
+    def __init__(self,theme_key,parent=None,profile_store=None):
+        super().__init__(parent);self.profile_store=profile_store
         self.token=0;self.puzzle=None;self.base_board=None;self.solution=None;self.selected=None;self.solved=False;self.revealed=False
         self.challenge_active=False;self.challenge_score=0;self.challenge_level=1;self.lives=3;self.recent_challenge_themes=[]
-        screen=parent.screen() if parent is not None else QApplication.primaryScreen();board_side=max(480,min(920,int(screen.availableGeometry().height()*.65))) if screen else 700
-        root=QHBoxLayout(self);root.setContentsMargins(26,24,26,24);root.setSpacing(26)
+        self.challenge_seed=1;self.high_score=self._load_high_score()
+        screen=parent.screen() if parent is not None else QApplication.primaryScreen();board_side=max(420,min(760,int(screen.availableGeometry().height()*.54))) if screen else 560
+        root=QHBoxLayout(self);root.setContentsMargins(16,14,16,14);root.setSpacing(18)
         self.board=ChessBoard();self.board.setMinimumSize(board_side,board_side);self.board.set_theme(theme_key);self.board.square_clicked.connect(self.on_square);root.addWidget(self.board,1)
-        panel=QFrame();panel.setObjectName("SidePanel");panel.setMinimumWidth(420);panel.setMaximumWidth(620);col=QVBoxLayout(panel);col.setContentsMargins(24,24,24,24);col.setSpacing(16)
+        panel=QFrame();panel.setObjectName("SidePanel");panel.setMinimumWidth(340);panel.setMaximumWidth(560);col=QVBoxLayout(panel);col.setContentsMargins(20,18,20,18);col.setSpacing(10)
         title=QLabel("PUZZLE STUDIO");title.setObjectName("Brand");col.addWidget(title)
-        intro=QLabel("Choose a chess skill and difficulty. Puzzles mix positions from your games with new legal positions generated locally by Stockfish.");intro.setObjectName("Muted");intro.setWordWrap(True);col.addWidget(intro)
-        skill_label=QLabel("Practice skill");skill_label.setObjectName("PlayerName");col.addWidget(skill_label)
+        intro=QLabel("Search saved PGNs or generate positions from scratch with Stockfish. Every puzzle gives you three lives.");intro.setObjectName("Muted");intro.setWordWrap(True);col.addWidget(intro)
+        mode_label=QLabel("TRAINING MODE");mode_label.setObjectName("SectionTitle");col.addWidget(mode_label)
+        self.mode_choice=QComboBox()
+        for label,value in (("Engine focus","focus"),("Total random","random"),("My Chess.com training","personal"),("Checkmate in N","mate"),("Challenge","challenge")):
+            self.mode_choice.addItem(label,value)
+        self.mode_choice.currentIndexChanged.connect(self._mode_changed);col.addWidget(self.mode_choice)
+        self.mode_description=QLabel();self.mode_description.setObjectName("ReviewSummary");self.mode_description.setWordWrap(True);col.addWidget(self.mode_description)
+
+        self.focus_controls=QFrame();focus_layout=QVBoxLayout(self.focus_controls);focus_layout.setContentsMargins(0,0,0,0);focus_layout.setSpacing(7)
+        focus_label=QLabel("Focus area");focus_label.setObjectName("PlayerName");focus_layout.addWidget(focus_label)
+        self.focus_type=QComboBox()
+        for label,value in (("Random tactical theme","theme"),("Game phase","phase"),("Piece utilization","piece")):
+            self.focus_type.addItem(label,value)
+        self.focus_type.currentIndexChanged.connect(self._focus_type_changed);focus_layout.addWidget(self.focus_type)
         self.skill_choice=QComboBox()
-        for label,value in (("Any tactic","Any tactic"),("Checkmate","Mate"),("Fork","Fork"),("Pin","Pin"),("Discovered attack","Discovered attack"),("Win material","Winning material"),("Promotion","Promotion")):
+        for label,value in (("Random tactic","Any tactic"),("Castling","Castling"),("Fork","Fork"),("Pin","Pin"),("Skewer","Skewer"),("Discovered attack","Discovered attack"),("Win material","Winning material"),("Promotion","Promotion"),("Check","Check")):
             self.skill_choice.addItem(label,value)
-        col.addWidget(self.skill_choice)
-        difficulty_row=QHBoxLayout();difficulty_title=QLabel("Difficulty");difficulty_title.setObjectName("PlayerName");difficulty_row.addWidget(difficulty_title);difficulty_row.addStretch();self.difficulty_label=QLabel("5 · Club");self.difficulty_label.setObjectName("AccentText");difficulty_row.addWidget(self.difficulty_label);col.addLayout(difficulty_row)
+        self.focus_choice=QComboBox();self.focus_choice.addItems(["Opening · moves 3–6","Middlegame","Endgame"]);self.focus_choice.setItemData(0,"Opening",Qt.ItemDataRole.UserRole)
+        self.focus_choice.setItemData(1,"Middlegame",Qt.ItemDataRole.UserRole);self.focus_choice.setItemData(2,"Endgame",Qt.ItemDataRole.UserRole)
+        self.piece_choice=QComboBox()
+        for label,value in (("Queen","q"),("Rook","r"),("Bishop","b"),("Knight","n"),("Pawn","p")):
+            self.piece_choice.addItem(label,value)
+        focus_layout.addWidget(self.skill_choice);focus_layout.addWidget(self.focus_choice);focus_layout.addWidget(self.piece_choice)
+        col.addWidget(self.focus_controls)
+
+        self.personal_note=QLabel("Uses your downloaded Chess.com games and review stats to target missed themes and weak game phases.");self.personal_note.setObjectName("Muted");self.personal_note.setWordWrap(True);col.addWidget(self.personal_note)
+        self.mate_controls=QFrame();mate_layout=QHBoxLayout(self.mate_controls);mate_layout.setContentsMargins(0,0,0,0)
+        mate_layout.addWidget(QLabel("Find a forced mate in up to"));self.mate_depth=QSpinBox();self.mate_depth.setRange(1,5);self.mate_depth.setValue(2);self.mate_depth.setSuffix(" moves");mate_layout.addWidget(self.mate_depth);col.addWidget(self.mate_controls)
+        difficulty_row=QHBoxLayout();self.difficulty_title=QLabel("Difficulty");self.difficulty_title.setObjectName("PlayerName");difficulty_row.addWidget(self.difficulty_title);difficulty_row.addStretch();self.difficulty_label=QLabel("5 · Club");self.difficulty_label.setObjectName("AccentText");difficulty_row.addWidget(self.difficulty_label);col.addLayout(difficulty_row)
         self.difficulty=QSlider(Qt.Orientation.Horizontal);self.difficulty.setRange(1,10);self.difficulty.setValue(5);self.difficulty.valueChanged.connect(self._difficulty_changed);col.addWidget(self.difficulty)
-        marks=QHBoxLayout();marks.addWidget(QLabel("Easy"));marks.addStretch();marks.addWidget(QLabel("Hard"));col.addLayout(marks)
-        self.generate_btn=QPushButton("Generate puzzle");self.generate_btn.setObjectName("PrimaryButton");self.generate_btn.clicked.connect(self.generate);col.addWidget(self.generate_btn)
-        self.challenge_btn=QPushButton("Start Challenge");self.challenge_btn.setObjectName("PrimaryButton");self.challenge_btn.clicked.connect(self.start_challenge);col.addWidget(self.challenge_btn)
+        self.difficulty_marks=QWidget();marks=QHBoxLayout(self.difficulty_marks);marks.setContentsMargins(0,0,0,0);marks.addWidget(QLabel("Easy"));marks.addStretch();marks.addWidget(QLabel("Hard"));col.addWidget(self.difficulty_marks)
+        source_buttons=QHBoxLayout();source_buttons.setSpacing(8)
+        self.find_game_btn=QPushButton("Find puzzle in game");self.find_game_btn.setObjectName("Button");self.find_game_btn.setToolTip("Search saved local and downloaded Chess.com PGNs for a position matching this mode.");self.find_game_btn.clicked.connect(lambda: self.generate("games"));source_buttons.addWidget(self.find_game_btn,1)
+        self.generate_btn=QPushButton("Generate puzzle");self.generate_btn.setObjectName("PrimaryButton");self.generate_btn.setToolTip("Use Stockfish to create and analyze a new legal position.");self.generate_btn.clicked.connect(lambda: self.generate("generated"));source_buttons.addWidget(self.generate_btn,1);col.addLayout(source_buttons)
         self.hint_btn=QPushButton("Hint");self.hint_btn.clicked.connect(self.show_hint);self.hint_btn.setEnabled(False);col.addWidget(self.hint_btn)
         self.solution_btn=QPushButton("Show solution");self.solution_btn.clicked.connect(self.show_solution);self.solution_btn.setEnabled(False);col.addWidget(self.solution_btn)
         self.progress=QProgressBar();self.progress.setTextVisible(True);self.progress.setFormat("Ready");self.progress.setValue(0);col.addWidget(self.progress)
         self.challenge_score_label=QLabel("Challenge score: 0");self.challenge_score_label.setObjectName("AccentText");col.addWidget(self.challenge_score_label)
+        self.high_score_label=QLabel(f"Personal best: {self.high_score} puzzles");self.high_score_label.setObjectName("Muted");col.addWidget(self.high_score_label)
         self.lives_label=QLabel("Lives: 3 / 3");self.lives_label.setObjectName("AccentText");col.addWidget(self.lives_label)
         self.status=QLabel("Generate a puzzle to start.");self.status.setObjectName("ReviewSummary");self.status.setWordWrap(True);self.status.setMinimumHeight(90);col.addWidget(self.status)
         self.line=QLabel("");self.line.setObjectName("Muted");self.line.setWordWrap(True);col.addWidget(self.line)
-        col.addStretch();close=QPushButton("Close");close.clicked.connect(self.accept);col.addWidget(close);root.addWidget(panel)
+        col.addStretch();root.addWidget(panel)
+        self._engine_ready=False;self._challenge_source="generated";self._generating=False
+        self._mode_changed(self.mode_choice.currentIndex())
+        self._focus_type_changed(self.focus_type.currentIndex())
+        self.find_game_btn.setEnabled(False);self.generate_btn.setEnabled(False)
+
+    def _load_high_score(self):
+        try:return max(0,int(self.profile_store.get_setting("puzzle_challenge_high_score","0"))) if self.profile_store else 0
+        except (TypeError,ValueError):return 0
+
+    def _save_high_score(self):
+        if self.challenge_score<=self.high_score:return
+        self.high_score=self.challenge_score
+        try:
+            if self.profile_store:self.profile_store.set_setting("puzzle_challenge_high_score",self.high_score)
+        except Exception:pass
+        self.high_score_label.setText(f"Personal best: {self.high_score} puzzles")
+        self.challenge_high_score_changed.emit(self.high_score)
+
+    def refresh_high_score(self):
+        self.high_score=self._load_high_score()
+        self.high_score_label.setText(f"Personal best: {self.high_score} puzzles")
+
+    def _mode_changed(self,_index):
+        mode=self.mode_choice.currentData()
+        descriptions={"focus":"Stockfish searches positions for a randomly chosen tactic, game phase, or piece to use.",
+                      "random":"Choose saved games or ask Stockfish to create a broad, unfiltered puzzle.",
+                      "personal":"Choose reviewed Chess.com game positions or generate a new position targeted by your saved weaknesses.",
+                      "mate":"Find a forced checkmate in up to N moves. Longer forced mates are harder, and the longest match is preferred.",
+                      "challenge":"Choose a source to start. Solve increasingly difficult puzzles; three mistakes on one puzzle end the run."}
+        self.mode_description.setText(descriptions.get(mode,""))
+        self.focus_controls.setVisible(mode=="focus");self.personal_note.setVisible(mode=="personal")
+        show_difficulty=mode not in ("mate","challenge")
+        self.mate_controls.setVisible(mode=="mate");self.difficulty.setVisible(show_difficulty)
+        self.difficulty_title.setVisible(show_difficulty);self.difficulty_label.setVisible(show_difficulty);self.difficulty_marks.setVisible(show_difficulty)
+        self.find_game_btn.setVisible(True);self.generate_btn.setVisible(True)
+        self.challenge_score_label.setVisible(mode=="challenge");self.high_score_label.setVisible(mode=="challenge")
+        enabled=self._engine_ready and not self._generating
+        self.find_game_btn.setEnabled(enabled);self.generate_btn.setEnabled(enabled)
+
+    def _focus_type_changed(self,_index):
+        kind=self.focus_type.currentData()
+        self.skill_choice.setVisible(kind=="theme");self.focus_choice.setVisible(kind=="phase");self.piece_choice.setVisible(kind=="piece")
 
     def _difficulty_changed(self,value):
         band="Beginner" if value<=2 else "Easy" if value<=4 else "Club" if value<=6 else "Challenging" if value<=8 else "Advanced"
         self.difficulty_label.setText(f"{value} · {band}")
 
-    def generate(self):
-        if self.generate_btn.isEnabled() is False:return
+    def generate(self,source="generated"):
+        if not self._engine_ready:
+            self.status.setText("Waiting for Stockfish to start…")
+            return
+        if self._generating:return
+        if self.mode_choice.currentData()=="challenge" and not self.challenge_active:
+            self.start_challenge(source)
+            return
+        if self.challenge_active:self._challenge_source=source
         self.token+=1;self.puzzle=None;self.base_board=None;self.solution=None;self.selected=None;self.solved=False;self.revealed=False
+        self._generating=True
         self.board.setEnabled(False);self.board.set_position(chess.Board(),review_sticker=None);self.hint_btn.setEnabled(False);self.solution_btn.setEnabled(False);self.line.setText("")
+        mode="challenge" if self.challenge_active else self.mode_choice.currentData()
         if self.challenge_active:
-            self.status.setText(f"Challenge score: {self.challenge_score} · Level {self.challenge_level}/10. Find the best move.")
-        else:self.status.setText("Searching your local games and generating legal positions…")
-        self.progress.setRange(0,0);self.progress.setFormat("Generating puzzle…");self.generate_btn.setEnabled(False)
-        skill="Any tactic" if self.challenge_active else self.skill_choice.currentData()
+            self.status.setText(f"Challenge score: {self.challenge_score} · Level {self.challenge_level}. Find the best move.")
+        elif mode=="personal":self.status.setText("Reading your downloaded Chess.com games and review stats…")
+        elif mode=="mate":self.status.setText(f"Searching for a forced mate in up to {self.mate_depth.value()} moves…")
+        else:self.status.setText("Searching saved PGNs…" if source=="games" else "Generating a new position…")
+        self.progress.setRange(0,0);self.progress.setFormat("Searching saved games…" if source=="games" else "Generating puzzle…")
+        self.find_game_btn.setEnabled(False);self.generate_btn.setEnabled(False)
+        skill="Any tactic";phase="";piece="";mate_in=0
+        if mode=="focus":
+            focus_kind=self.focus_type.currentData()
+            if focus_kind=="theme":skill=self.skill_choice.currentData()
+            elif focus_kind=="phase":phase=self.focus_choice.currentData()
+            elif focus_kind=="piece":piece=self.piece_choice.currentData()
+        if mode=="personal":skill=getattr(self,"personal_skill","Any tactic");phase=getattr(self,"personal_phase","")
+        if mode=="mate":mate_in=self.mate_depth.value()
         difficulty=self.challenge_level if self.challenge_active else self.difficulty.value()
-        self.puzzle_requested.emit((self.token,skill,difficulty,self.challenge_active,list(self.recent_challenge_themes)))
+        self.puzzle_requested.emit({"token":self.token,"mode":mode,"skill":skill,"phase":phase,"piece":piece,
+                                    "mate_in":mate_in,"difficulty":difficulty,"challenge":self.challenge_active,
+                                    "source":source,"challenge_score":self.challenge_score,
+                                    "recent_themes":list(self.recent_challenge_themes),
+                                    "recent_fens":list(getattr(self,"recent_challenge_fens",[]))})
 
-    def start_challenge(self):
+    def start_challenge(self,source="generated"):
+        if not self._engine_ready:
+            self.status.setText("Wait for Stockfish to finish starting before beginning a challenge.")
+            return
         if self.challenge_active:return
         self.challenge_active=True;self.challenge_score=0;self.challenge_level=1
-        self.recent_challenge_themes=[]
-        self.challenge_score_label.setText("Challenge score: 0 · Level 1/10")
-        self.skill_choice.setEnabled(False);self.difficulty.setEnabled(False);self.challenge_btn.setEnabled(False)
-        self.generate_btn.setText("Generating challenge…");self.generate()
+        self._challenge_source=source;self.recent_challenge_themes=[];self.recent_challenge_fens=[]
+        self.challenge_score_label.setText("Challenge score: 0 · Level 1")
+        self.skill_choice.setEnabled(False);self.difficulty.setEnabled(False);self.mode_choice.setEnabled(False)
+        self.generate(source)
 
     def _next_challenge_puzzle(self):
         if not self.challenge_active:return
-        self.challenge_level=min(10,1+self.challenge_score)
-        self.challenge_score_label.setText(f"Challenge score: {self.challenge_score} · Level {self.challenge_level}/10")
-        self.generate_btn.setText("Generating challenge…");self.generate_btn.setEnabled(True);self.generate()
+        self.challenge_level=1+self.challenge_score
+        self.challenge_score_label.setText(f"Challenge score: {self.challenge_score} · Level {self.challenge_level}")
+        self.generate(self._challenge_source)
 
     def _challenge_failed(self):
         self.challenge_active=False;self.board.setEnabled(False)
-        self.skill_choice.setEnabled(True);self.difficulty.setEnabled(True)
-        self.challenge_btn.setEnabled(True);self.challenge_btn.setText("Play Again")
-        self.generate_btn.setText("Generate puzzle");self.generate_btn.setEnabled(True)
+        self.skill_choice.setEnabled(True);self.difficulty.setEnabled(True);self.mode_choice.setEnabled(True)
+        self._generating=False;self.find_game_btn.setEnabled(self._engine_ready);self.generate_btn.setEnabled(self._engine_ready)
         self.hint_btn.setEnabled(False);self.solution_btn.setEnabled(self.puzzle is not None)
+        self._save_high_score()
         self.challenge_score_label.setText(f"Challenge score: {self.challenge_score} · final")
         self.status.setText(f"Challenge over · You solved {self.challenge_score} puzzle(s). You used all 3 lives on this puzzle.")
+
+    def set_engine_ready(self,ready):
+        self._engine_ready=bool(ready)
+        if not self._engine_ready and not self.challenge_active:
+            self.status.setText("Waiting for Stockfish to start…")
+        if self.challenge_active:return
+        enabled=self._engine_ready and not self._generating
+        self.find_game_btn.setEnabled(enabled);self.generate_btn.setEnabled(enabled)
 
     def update_progress(self,token,done,total):
         if token!=self.token:return
@@ -235,27 +338,31 @@ class PuzzleDialog(QDialog):
 
     def show_puzzle(self,token,puzzle,error):
         if token!=self.token:return
-        self.generate_btn.setEnabled(True);self.board.setEnabled(True);self.progress.setRange(0,1);self.progress.setValue(1)
+        self._generating=False;self.board.setEnabled(True);self.progress.setRange(0,1);self.progress.setValue(1)
         if not puzzle:
             self.puzzle=None;self.status.setText(error or "No matching puzzle was found.");self.progress.setFormat("No puzzle found")
             if self.challenge_active:
                 self.status.setText(f"Could not generate a level {self.challenge_level} puzzle. Your score remains {self.challenge_score}; retrying the same level is safe.")
-                self.generate_btn.setText("Retry challenge puzzle");self.generate_btn.setEnabled(True)
+            self.find_game_btn.setEnabled(self._engine_ready);self.generate_btn.setEnabled(self._engine_ready)
             return
         self.puzzle=puzzle;self.base_board=chess.Board(puzzle["fen"]);self.solution=chess.Move.from_uci(puzzle["move"]);self.selected=None;self.solved=False;self.revealed=False
         self.lives=3;self.lives_label.setText("Lives: 3 / 3")
         self.board.flipped=self.base_board.turn==chess.BLACK
         self.board.set_position(self.base_board,last_move=None,selected=None,best_move=None,review_sticker=None)
-        level_note="Matches the selected difficulty." if puzzle.get("difficulty_match") else "Closest match found; difficulty is approximate."
+        level_note=(f"Forced mate in {puzzle['mate_in']}." if puzzle.get("mate_in") else
+                    "Matches the selected difficulty." if puzzle.get("difficulty_match") else "Closest match found; difficulty is approximate.")
         self.status.setText(f"{puzzle['theme']} · {puzzle['difficulty']}/10 · {level_note} Find the best move for the side to play.")
         self.progress.setFormat("Puzzle ready");self.hint_btn.setEnabled(not self.challenge_active);self.solution_btn.setEnabled(not self.challenge_active)
         if self.challenge_active:
-            self.challenge_btn.setText(f"Challenge · {self.challenge_score} solved");self.challenge_score_label.setText(f"Challenge score: {self.challenge_score} · Level {self.challenge_level}/10")
+            self.challenge_score_label.setText(f"Challenge score: {self.challenge_score} · Level {self.challenge_level}")
             self.recent_challenge_themes.append(puzzle["theme"]);self.recent_challenge_themes=self.recent_challenge_themes[-2:]
             level_note="" if puzzle.get("difficulty_match") else " · approximate level"
-            self.status.setText(f"{puzzle['theme']} puzzle · score {self.challenge_score} · level {self.challenge_level}/10{level_note}. Find the best move.")
-            self.generate_btn.setText("Challenge in progress");self.generate_btn.setEnabled(False)
+            self.status.setText(f"{puzzle['theme']} puzzle · score {self.challenge_score} · level {self.challenge_level}{level_note}. Find the best move.")
         self.line.setText(f"The position came from {puzzle.get('source','a generated legal game position')}.")
+        if self.challenge_active:
+            self.recent_challenge_fens.append(self.base_board.fen());self.recent_challenge_fens=self.recent_challenge_fens[-100:]
+        enabled=self._engine_ready and not self.challenge_active
+        self.find_game_btn.setEnabled(enabled);self.generate_btn.setEnabled(enabled)
 
     def on_square(self,square):
         if self.base_board is None or self.solved or self.revealed:return
@@ -272,7 +379,9 @@ class PuzzleDialog(QDialog):
                     self.board.set_position(solved_board,last_move=candidate,selected=None,best_move=None,review_sticker="Correct",sticker_color="#39a982")
                     self.status.setText("Correct. You found the engine’s top move.");self.line.setText("Best line: "+" ".join(self.puzzle.get("pv",[])));self.selected=None
                     if self.challenge_active:
-                        self.challenge_score+=1;self.challenge_score_label.setText(f"Challenge score: {self.challenge_score} · next level {min(10,1+self.challenge_score)}/10")
+                        self.challenge_score+=1
+                        self.challenge_score_label.setText(f"Challenge score: {self.challenge_score} · next level {1+self.challenge_score}")
+                        self._save_high_score()
                         self.hint_btn.setEnabled(False);self.solution_btn.setEnabled(False);self.board.setEnabled(False)
                         self.status.setText(f"Correct · score {self.challenge_score}. Next puzzle is harder…")
                         QTimer.singleShot(900,self._next_challenge_puzzle)
@@ -306,10 +415,30 @@ class PuzzleDialog(QDialog):
         self.status.setText(hints.get(self.puzzle["theme"],"Look for checks, captures, and threats before choosing a quiet move."))
 
     def show_solution(self):
-        if not self.puzzle:return
-        self.revealed=True;self.board.set_position(self.base_board,last_move=None,selected=None,best_move=self.solution,review_sticker="Best move",sticker_color="#39a982")
-        self.status.setText(f"Best move: {self.puzzle['san']} · {', '.join(self.puzzle.get('themes',[]))}")
-        self.line.setText("Best line: "+" ".join(self.puzzle.get("pv",[])))
+        if not isinstance(self.puzzle,dict) or self.base_board is None:
+            self.status.setText("There is no puzzle solution to show yet.")
+            return
+        try:
+            solution=self.solution
+            if not isinstance(solution,chess.Move):
+                solution=chess.Move.from_uci(str(self.puzzle.get("move","")))
+            if solution not in self.base_board.legal_moves:
+                raise ValueError("The saved solution is not legal in this position.")
+            san=self.base_board.san(solution)
+            themes=self.puzzle.get("themes",[])
+            if not isinstance(themes,(list,tuple)):themes=[]
+            pv=self.puzzle.get("pv",[])
+            if not isinstance(pv,(list,tuple)):pv=[]
+            best_line=" ".join(str(move) for move in pv)
+            solved_board=self.base_board.copy(stack=False);solved_board.push(solution)
+            self.solution=solution;self.revealed=True
+            self.board.set_position(solved_board,last_move=solution,selected=None,best_move=None,
+                                    review_sticker="Best move",sticker_color="#39a982")
+            theme_text=", ".join(str(theme) for theme in themes)
+            self.status.setText(f"Best move: {san}"+(f" · {theme_text}" if theme_text else ""))
+            self.line.setText("Best line: "+best_line)
+        except (AttributeError,KeyError,TypeError,ValueError) as exc:
+            self.status.setText(f"Could not show this solution: {exc}")
 
 
 class ReviewProgressDialog(QDialog):

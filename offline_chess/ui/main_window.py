@@ -54,8 +54,10 @@ from ..review_logic import *
 from ..telemetry import make_checkin
 from .board import *
 from .charts import *
+from .feedback_dialog import FeedbackDialog
 from .profile_dialog import ProfileDialog
 from .review_dialogs import *
+from .position_lab import PositionAnalysisPage
 from .theme import *
 
 class ChessWindow(QMainWindow):
@@ -69,6 +71,7 @@ class ChessWindow(QMainWindow):
     evaluation_request = pyqtSignal(object)
     openings_loaded = pyqtSignal(object, object)
     explore_request = pyqtSignal(object)
+    position_analysis_request = pyqtSignal(object)
     puzzle_request = pyqtSignal(object)
     syzygy_request = pyqtSignal(str)
 
@@ -210,6 +213,7 @@ class ChessWindow(QMainWindow):
         self.best_request.connect(self.worker.find_best); self.review_request.connect(self.worker.review_game)
         self.practice_analysis_request.connect(self.worker.analyze_practice_attempt)
         self.explore_request.connect(self.worker.explore)
+        self.position_analysis_request.connect(self.worker.analyze_position)
         self.puzzle_request.connect(self.worker.generate_puzzle)
         self.syzygy_request.connect(self.worker.configure_syzygy)
         self.shutdown_request.connect(self.worker.shutdown)
@@ -217,6 +221,7 @@ class ChessWindow(QMainWindow):
         self.worker.bot_move.connect(self._bot_move); self.worker.best_move.connect(self._best_move)
         self.worker.review_progress.connect(self._review_progress); self.worker.review_done.connect(self._review_done)
         self.worker.explore_done.connect(self._explorer_done)
+        self.worker.position_analysis_done.connect(self.position_lab.apply_results)
         self.worker.puzzle_progress.connect(self._puzzle_progress);self.worker.puzzle_done.connect(self._puzzle_done)
         self.worker.operation_error.connect(self._engine_error)
         self.worker.syzygy_status.connect(self._syzygy_configured)
@@ -237,10 +242,13 @@ class ChessWindow(QMainWindow):
         self.openings_btn=QPushButton("Load Lichess DB"); self.openings_btn.clicked.connect(self.load_opening_dialog); top.addWidget(self.openings_btn)
         self.book_btn=QPushButton("Load weighted book"); self.book_btn.clicked.connect(self.load_book_dialog); top.addWidget(self.book_btn)
         self.profile_btn=QPushButton("Profile"); self.profile_btn.clicked.connect(self.open_profile); top.addWidget(self.profile_btn)
-        self.puzzles_btn=QPushButton("Puzzles");self.puzzles_btn.clicked.connect(self.open_puzzles);top.addWidget(self.puzzles_btn)
+        self.report_bug_btn=QPushButton("Report bug");self.report_bug_btn.setObjectName("FeedbackButton");self.report_bug_btn.setToolTip("Send a bug report to the maintainer dashboard.");self.report_bug_btn.clicked.connect(lambda:self.open_feedback("bug"));top.addWidget(self.report_bug_btn)
+        self.suggest_feature_btn=QPushButton("Suggest feature");self.suggest_feature_btn.setObjectName("FeedbackButton");self.suggest_feature_btn.setToolTip("Send a feature suggestion to the maintainer dashboard.");self.suggest_feature_btn.clicked.connect(lambda:self.open_feedback("feature"));top.addWidget(self.suggest_feature_btn)
         self.fullscreen_btn=QPushButton("Exit fullscreen");self.fullscreen_btn.setToolTip("F11 toggles full screen · Esc returns to windowed mode");self.fullscreen_btn.clicked.connect(self.toggle_fullscreen);top.addWidget(self.fullscreen_btn)
 
-        splitter=QSplitter(Qt.Orientation.Horizontal); root.addWidget(splitter,1); splitter.setChildrenCollapsible(False)
+        self.main_tabs=QTabWidget();self.main_tabs.setObjectName("MainTabs");root.addWidget(self.main_tabs,1)
+        game_page=QWidget();game_page_layout=QVBoxLayout(game_page);game_page_layout.setContentsMargins(0,0,0,0)
+        splitter=QSplitter(Qt.Orientation.Horizontal); game_page_layout.addWidget(splitter,1); splitter.setChildrenCollapsible(False)
         play_area=QWidget(); play_col=QVBoxLayout(play_area); play_col.setContentsMargins(0,0,14,0); play_col.setSpacing(8)
         self.opponent=QFrame(); self.opponent.setObjectName("PlayerCard"); opp_row=QHBoxLayout(self.opponent);opp_row.setContentsMargins(20,14,20,14)
         self.opponent_avatar=QLabel("♟"); self.opponent_avatar.setObjectName("Avatar"); opp_row.addWidget(self.opponent_avatar)
@@ -331,6 +339,15 @@ class ChessWindow(QMainWindow):
         self.explore_btn=self._button("Explore this opening","secondary");self.explore_btn.clicked.connect(self.explore_openings);coach_col.addWidget(self.explore_btn)
         self.coach_puzzles_btn=self._button("Open puzzle studio","secondary");self.coach_puzzles_btn.clicked.connect(self.open_puzzles);coach_col.addWidget(self.coach_puzzles_btn);self.mode_stack.addWidget(coach_page)
         splitter.addWidget(panel); splitter.setSizes([1660,820])
+        self.main_tabs.addTab(game_page,"Game")
+        self.position_lab=PositionAnalysisPage()
+        self.position_lab.analysis_requested.connect(self.position_analysis_request.emit)
+        self.main_tabs.addTab(self.position_lab,"Position Lab")
+        self.puzzle_dialog=PuzzleDialog(self.board_theme,self,self.profile_store)
+        self.puzzle_dialog.setStyleSheet(self._stylesheet())
+        self.puzzle_dialog.puzzle_requested.connect(self._request_puzzle)
+        self.puzzle_dialog.challenge_high_score_changed.connect(self._update_puzzle_high_score)
+        self.main_tabs.addTab(self.puzzle_dialog,"Puzzles")
         self.statusBar().showMessage("Offline play · your moves stay on this computer")
         if self.profile_error:self.statusBar().showMessage(f"Profile storage unavailable: {self.profile_error}")
         self.setStyleSheet(self._stylesheet())
@@ -338,6 +355,20 @@ class ChessWindow(QMainWindow):
     def _button(self,text,kind):
         names={"secondary":"Button","primary":"PrimaryButton","danger":"DangerButton","mode":"ModeButton"}
         btn=QPushButton(text); btn.setObjectName(names.get(kind,"Button")); btn.setCursor(Qt.CursorShape.PointingHandCursor); return btn
+
+    def open_feedback(self,category):
+        if not self.profile_store:
+            QMessageBox.warning(self,"Feedback unavailable","Local profile storage is unavailable, so the feedback form cannot attach the required installation ID.")
+            return
+        dialog=FeedbackDialog(self.profile_store,category,self)
+        dialog.completed.connect(self._feedback_completed)
+        dialog.exec()
+
+    def _feedback_completed(self,success,error):
+        if success:
+            self.statusBar().showMessage("Thanks. Your feedback was sent to the maintainer dashboard.",8000)
+        else:
+            self.statusBar().showMessage(f"Feedback could not be sent: {error or 'check your connection.'}",10000)
     def _configure_table(self,table):
         table.verticalHeader().hide();table.verticalHeader().setDefaultSectionSize(38);table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows);table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers);table.setAlternatingRowColors(True);table.setShowGrid(False)
     def _metric_card(self,label,value):
@@ -376,10 +407,30 @@ class ChessWindow(QMainWindow):
         QWidget { background:#1b1d1f; color:#e6e9eb; font-family:'Segoe UI',Arial,sans-serif; font-size:15px; }
         QMainWindow { background:#1b1d1f; }
         #Brand { color:#f1f3f4; font-size:30px; font-weight:800; letter-spacing:1px; }
+        QTabWidget#MainTabs::pane { border:1px solid #343a3d; border-radius:10px; top:-1px; }
+        QTabWidget#MainTabs QTabBar::tab { background:#242729; color:#aab2b5; border:1px solid #343a3d; border-bottom:0; border-top-left-radius:8px; border-top-right-radius:8px; padding:10px 20px; margin-right:4px; font-weight:700; }
+        QTabWidget#MainTabs QTabBar::tab:selected { background:#303a33; color:#b5e08e; border-color:#4a674e; }
+        QTabWidget#MainTabs QTabBar::tab:hover { color:#eef2ed; }
         #Muted { color:#aab2b5; font-size:14px; }
         #OpeningPill { background:#292d30; color:#a9d7b4; border-radius:12px; padding:8px 12px; font-weight:600; }
         #PlayerCard,#SidePanel { background:#242729; border:1px solid #303639; border-radius:12px; }
         #InsetCard,#MetricCard,#ReviewCard { background:#1e2224; border:1px solid #343a3d; border-radius:10px; }
+        #PositionPanel { background:#242729; border:1px solid #303639; border-radius:12px; }
+        #PositionCard { background:#1e2224; border:1px solid #343a3d; border-radius:9px; }
+        #PositionPanelTitle { color:#eef0f1; font-size:17px; font-weight:800; }
+        #PieceRack { background:transparent; border:0; }
+        QToolButton[pieceButton="true"] { background:#202426; color:#e6e9eb; border:1px solid #343a3d; border-radius:8px; font-size:31px; min-width:48px; max-width:62px; min-height:42px; }
+        QToolButton[pieceButton="true"]:hover { background:#2b3230; border-color:#668f68; }
+        QToolButton[pieceButton="true"][selectedPiece="true"] { background:#385b41; border:2px solid #91c65b; }
+        QToolButton#CastlingToggle { background:transparent; color:#d2d9d8; border:0; text-align:left; padding:5px 0; font-weight:700; }
+        QToolButton#CastlingToggle:hover { color:#b5e08e; }
+        QRadioButton { color:#d0d6d7; spacing:6px; padding:3px; }
+        QRadioButton::indicator { width:15px; height:15px; }
+        QRadioButton::indicator:unchecked { background:#292e31; border:1px solid #697276; border-radius:8px; }
+        QRadioButton::indicator:checked { background:#91c65b; border:3px solid #385b41; border-radius:8px; }
+        QTableWidget#PositionResults { border:0; border-radius:5px; background:#1e2224; alternate-background-color:#252a2c; }
+        QTableWidget#PositionResults QHeaderView::section { background:#292e31; padding:7px 5px; font-size:10px; }
+        QTableWidget#PositionResults::item { padding:5px 4px; }
         #MetricCaption { color:#a8b1b4; font-size:10px; font-weight:800; letter-spacing:1px; }
         #MetricValue { color:#f3f5f4; font-size:17px; font-weight:800; }
         #MoveBadge { background:#3d6949; color:#f4fff5; border-radius:8px; padding:6px 9px; font-size:11px; font-weight:800; letter-spacing:.6px; }
@@ -394,7 +445,7 @@ class ChessWindow(QMainWindow):
         #AccentText { color:#9ed3ac; font-weight:800; font-size:19px; }
         #ReviewSummary { background:#1e2224; color:#d4dcdd; border:1px solid #343a3d; border-radius:10px; padding:12px; font-size:13px; }
         QDialog { background:#1b1d1f; }
-        QComboBox,QSpinBox { background:#292e31; color:#e6e9eb; border:1px solid #42494c; border-radius:8px; padding:9px 11px; min-height:24px; }
+        QComboBox,QSpinBox,QLineEdit,QTextEdit { background:#292e31; color:#e6e9eb; border:1px solid #42494c; border-radius:8px; padding:9px 11px; min-height:24px; }
         QComboBox:hover,QSpinBox:hover { border-color:#668f68; }
         QComboBox::drop-down { border:0; width:26px; }
         QComboBox QAbstractItemView { background:#292e31; color:#e6e9eb; border:1px solid #42494c; selection-background-color:#385b41; padding:5px; }
@@ -404,6 +455,8 @@ class ChessWindow(QMainWindow):
         QPushButton#Button:hover { background:#41494c; }
         QPushButton#PrimaryButton { background:#81b64c; color:#162116; border:0; border-radius:8px; padding:13px 16px; font-weight:800; }
         QPushButton#PrimaryButton:hover { background:#91c55b; }
+        QPushButton#FeedbackButton { background:#292f31; color:#d4e5d7; border:1px solid #46534a; border-radius:8px; padding:8px 9px; min-height:22px; font-size:12px; font-weight:700; }
+        QPushButton#FeedbackButton:hover { background:#354239; border-color:#81b64c; }
         QPushButton#DangerButton { background:#4a2c2d; color:#f0b3ae; border:1px solid #684044; border-radius:8px; padding:12px 15px; font-weight:700; }
         QPushButton#DangerButton:hover { background:#5a3436; }
         QPushButton#ModeButton { background:#202426; color:#aeb7ba; border:1px solid #343a3d; border-radius:8px; padding:10px 8px; min-height:22px; font-weight:800; }
@@ -478,6 +531,8 @@ class ChessWindow(QMainWindow):
     def _engine_started(self,info):
         self.engine_startup_timer.stop();self.engine_startup_timed_out=False
         self.engine_ready=True; self.engine_status.setText("Stockfish 19 · ready"); self.engine_status.setStyleSheet("color:#91ca9c")
+        self.position_lab.set_engine_ready(True)
+        self.puzzle_dialog.set_engine_ready(True)
         self.syzygy_supported="SyzygyPath" in info.get("options",set())
         self.syzygy_active=bool(info.get("syzygy_active",False))
         self.syzygy_error=info.get("syzygy_error","")
@@ -547,6 +602,9 @@ class ChessWindow(QMainWindow):
     def _engine_failed(self,message):
         self.engine_startup_timer.stop()
         self.engine_status.setText("Stockfish unavailable"); self.engine_status.setStyleSheet("color:#e28b76")
+        self.position_lab.set_engine_error(message)
+        self.puzzle_dialog.set_engine_ready(False)
+        self.puzzle_dialog.status.setText(f"Stockfish is unavailable: {message}")
         self.syzygy_supported=False;self._update_syzygy_button()
         QMessageBox.warning(self,"Stockfish unavailable",message+"\n\nSet STOCKFISH_PATH or place the engine beside this app.")
     def _engine_error(self,message):
@@ -1055,41 +1113,115 @@ class ChessWindow(QMainWindow):
         self.explorer_dialog.show()
 
     def open_puzzles(self):
+        self.main_tabs.setCurrentWidget(self.puzzle_dialog)
         if not self.engine_ready:
             message="Stockfish is taking longer than expected to start. Check STOCKFISH_PATH and try again." if self.engine_startup_timed_out else "Stockfish is still starting. Try again in a moment."
-            QMessageBox.information(self,"Puzzle studio",message);return
-        dialog=PuzzleDialog(self.board_theme,self);dialog.setStyleSheet(self._stylesheet());dialog.puzzle_requested.connect(self._request_puzzle)
-        self.puzzle_dialog=dialog;dialog.exec()
-        if self.puzzle_dialog is dialog:self.puzzle_dialog=None
+            self.puzzle_dialog.status.setText(message)
 
-    def _puzzle_source_positions(self):
-        positions=[];seen=set()
-        def collect(start,moves):
+    def _puzzle_source_positions(self,mode="focus",source="games"):
+        positions=[];seen=set();weakness_skill="Any tactic";weakness_phase=""
+        def collect(start,moves,source_label="a saved game",error_plies=None):
             board=start.copy(stack=False)
-            for move in moves:
+            for ply,move in enumerate(moves,1):
                 if move not in board.legal_moves:break
-                if board.fullmove_number>=7 and len(board.piece_map())>=12 and not board.is_game_over():
-                    key=position_key(board)
-                    if key not in seen:seen.add(key);positions.append(board.fen())
+                if board.fullmove_number>=3 and len(board.piece_map())>=8 and not board.is_game_over():
+                    key=position_key(board);phase=game_phase(board);is_error=bool(error_plies and ply in error_plies)
+                    if mode!="personal" or error_plies is None or is_error:
+                        if key not in seen:
+                            seen.add(key);positions.append({"fen":board.fen(),"source":source_label,"phase":phase,
+                                                           "move_number":board.fullmove_number,"mistake":is_error})
                 board.push(move)
-        collect(self.game_start_board,self.history)
-        if self.profile_store:
+        if source=="games" and mode!="personal":
+            collect(self.game_start_board,self.history,"the current game")
+            if self.profile_store:
+                try:
+                    for record in self.profile_store.games()[:20]:
+                        if not record.get("pgn"):continue
+                        game=chess.pgn.read_game(io.StringIO(record["pgn"]))
+                        if game is not None and not game.errors:collect(game.board(),list(game.mainline_moves()),"a saved game")
+                except Exception as exc:self.statusBar().showMessage(f"Some saved games could not be searched for puzzles: {exc}",6000)
+        if self.profile_store and (source=="games" or mode=="personal"):
             try:
-                for record in self.profile_store.games()[:12]:
-                    if not record.get("pgn"):continue
-                    game=chess.pgn.read_game(io.StringIO(record["pgn"]))
-                    if game is not None and not game.errors:collect(game.board(),list(game.mainline_moves()))
-            except Exception as exc:self.statusBar().showMessage(f"Some saved games could not be searched for puzzles: {exc}",6000)
-        if len(positions)>80:positions=random.sample(positions,80)
-        return positions
+                username=self.profile_store.get_setting("chesscom_username","")
+                records=self.profile_store.chesscom_games(username) if username else []
+                theme_counts=Counter();phase_counts=Counter();personal_positions=[]
+                if mode=="personal":
+                    for record in records:
+                        if not record.get("reviewed"):continue
+                        try:
+                            stats=json.loads(record.get("stats_json") or "{}")
+                            error_themes=stats.get("error_themes",{}) if isinstance(stats,dict) else {}
+                            for theme,count in error_themes.items():theme_counts[theme]+=int(count)
+                            for phase,count in error_themes.items():
+                                if phase.endswith(" errors"):phase_counts[phase[:-7]]+=int(count)
+                        except (TypeError,ValueError,AttributeError):pass
+                if source=="games":
+                    for record in records[:60]:
+                        pgn_path=record.get("pgn_path")
+                        if not pgn_path or not Path(pgn_path).is_file():continue
+                        try:
+                            with Path(pgn_path).open("r",encoding="utf-8",errors="replace") as handle:
+                                game=chess.pgn.read_game(handle)
+                            if game is None or game.errors:continue
+                            error_plies=set()
+                            if mode=="personal":
+                                try:
+                                    review=json.loads(record.get("review_json") or "{}")
+                                    review_moves=review.get("moves",[]) if isinstance(review,dict) else []
+                                    for move_info in review_moves:
+                                        if (isinstance(move_info,dict) and move_info.get("side")==record.get("user_color")
+                                                and move_info.get("verdict") in ("Miss","Inaccuracy","Mistake","Blunder")):
+                                            error_plies.add(int(move_info.get("ply",0)))
+                                except (TypeError,ValueError,AttributeError):pass
+                            before_count=len(positions)
+                            collect(game.board(),list(game.mainline_moves()),"a downloaded Chess.com game",
+                                    error_plies if mode=="personal" else None)
+                            if len(positions)>before_count:personal_positions.extend(positions[before_count:])
+                        except (OSError,UnicodeError,ValueError):continue
+                if mode=="personal" and source=="games":positions=personal_positions
+                theme_map={"Missed forced mate":"Mate","King safety weakened":"Castling","Dropped material after an error":"Winning material",
+                           "Missed material win":"Winning material","Undefended piece exposed":"Winning material",
+                           "Piece left without its only defender":"Winning material","Missed tactical opportunity":"Any tactic"}
+                mapped=Counter()
+                for theme,count in theme_counts.items():
+                    if theme in theme_map:mapped[theme_map[theme]]+=count
+                weakness_skill=sorted(mapped,key=lambda key:(-mapped[key],key))[0] if mapped else "Any tactic"
+                weakness_phase=sorted(phase_counts,key=lambda key:(-phase_counts[key],key))[0] if phase_counts else ""
+                if mode=="personal" and source=="games" and not positions:
+                    for record in records[:60]:
+                        path=record.get("pgn_path")
+                        if not path or not Path(path).is_file():continue
+                        try:
+                            with Path(path).open("r",encoding="utf-8",errors="replace") as handle:
+                                game=chess.pgn.read_game(handle)
+                            if game and not game.errors:collect(game.board(),list(game.mainline_moves()),"a downloaded Chess.com game")
+                        except (OSError,UnicodeError,ValueError):continue
+                    positions=[item for item in positions if item["source"]=="a downloaded Chess.com game"]
+            except Exception as exc:self.statusBar().showMessage(f"Chess.com puzzle data could not be loaded: {exc}",6000)
+        if source=="games" and len(positions)>160:
+            positions=sorted(positions,key=lambda item:hashlib.sha256(item["fen"].encode()).digest())[:160]
+        return positions,weakness_skill,weakness_phase
 
     def _request_puzzle(self,request):
         if not self.puzzle_dialog:return
-        dialog_token,skill,difficulty,challenge_mode,recent_themes=request;self.puzzle_token+=1
+        request=dict(request);dialog_token=request.get("token",0);self.puzzle_token+=1
         self.puzzle_active=(self.puzzle_token,self.puzzle_dialog,dialog_token)
-        source_fens=[] if challenge_mode else self._puzzle_source_positions()
-        task=(self.puzzle_token,skill,difficulty,source_fens,challenge_mode,recent_themes)
+        mode=request.get("mode","focus");source=request.get("source","generated")
+        source_positions,personal_skill,personal_phase=(self._puzzle_source_positions(mode,source)
+            if source=="games" or mode=="personal" else ([],"Any tactic",""))
+        if source=="games" and not source_positions:
+            self.puzzle_dialog.personal_skill=personal_skill;self.puzzle_dialog.personal_phase=personal_phase
+            self.puzzle_dialog.show_puzzle(dialog_token,None,
+                "No saved game positions are available yet. Import a PGN, play a game, or download Chess.com games in Profile.")
+            return
+        if mode=="personal":self.puzzle_dialog.personal_skill=personal_skill;self.puzzle_dialog.personal_phase=personal_phase
+        request.update({"source":source,"source_positions":source_positions,"personal_skill":personal_skill,"personal_phase":personal_phase,
+                        "skill":personal_skill if mode=="personal" else request.get("skill","Any tactic")})
+        task=(self.puzzle_token,request)
         self.puzzle_request.emit(task)
+
+    def _update_puzzle_high_score(self,score):
+        self.puzzle_high_score=int(score)
 
     def _puzzle_progress(self,token,done,total):
         if not self.puzzle_dialog or not getattr(self,"puzzle_active",None):return
@@ -1372,6 +1504,7 @@ class ChessWindow(QMainWindow):
         if not self.profile_store:
             QMessageBox.warning(self,"Profile unavailable",f"Could not open local profile storage.\n\n{self.profile_error or ''}");return
         dialog=ProfileDialog(self.profile_store,self.open_saved_game,self.set_board_theme,self.set_board_presentation,self);dialog.setStyleSheet(self._stylesheet());dialog.exec();self._saved_game_stats_cache=None
+        self.puzzle_dialog.refresh_high_score()
 
     def set_board_theme(self,theme_key):
         if theme_key not in BOARD_THEMES:return

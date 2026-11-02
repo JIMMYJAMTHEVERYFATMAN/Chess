@@ -18,16 +18,16 @@ from PyQt6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGridLayout, QSplitter, QTableWidget,
     QTableWidgetItem, QHeaderView, QFileDialog, QMessageBox, QProgressBar,
     QCheckBox, QSpinBox, QComboBox, QAbstractItemView, QScrollArea, QSizePolicy,
-    QStackedWidget, QToolTip, QMenu, QTabWidget, QLineEdit, QTextEdit,
+    QStackedWidget, QToolTip, QMenu, QTabWidget, QLineEdit,
 )
 
 from ..chesscom_data import *
 from ..openings import *
 from ..review_logic import *
-from ..telemetry import ReportingWorker, make_feedback
 from .board import *
 from .charts import *
 from .common import fit_dialog_to_screen
+from .feedback_dialog import FeedbackDialog
 from .review_dialogs import *
 from .theme import *
 
@@ -39,6 +39,10 @@ class ProfileDialog(QDialog):
         overview_page=QWidget();layout=QVBoxLayout(overview_page);self.tabs.addTab(overview_page,"Overview")
         self.rating=QLabel();self.rating.setObjectName("Brand");layout.addWidget(self.rating)
         self.rating_note=QLabel();self.rating_note.setObjectName("Muted");layout.addWidget(self.rating_note)
+        try:puzzle_high_score=max(0,int(store.get_setting("puzzle_challenge_high_score","0") or 0))
+        except (TypeError,ValueError):puzzle_high_score=0
+        self.puzzle_high_score=QLabel(f"Puzzle challenge high score: {puzzle_high_score} puzzles")
+        self.puzzle_high_score.setObjectName("AccentText");layout.addWidget(self.puzzle_high_score)
         theme_row=QHBoxLayout();self.theme_preview=ChessBoard();self.theme_preview.setMinimumSize(210,210);self.theme_preview.setMaximumSize(250,250);theme_row.addWidget(self.theme_preview)
         theme_controls=QVBoxLayout();theme_title=QLabel("BOARD STYLE");theme_title.setObjectName("SectionTitle");theme_controls.addWidget(theme_title)
         self.theme_choice=QComboBox()
@@ -96,38 +100,14 @@ class ProfileDialog(QDialog):
         self.store.set_setting("usage_reporting_enabled","1" if enabled else "0")
 
     def _send_feedback(self):
-        dialog=QDialog(self);dialog.setWindowTitle("Send Offline Chess feedback")
-        layout=QVBoxLayout(dialog)
-        layout.addWidget(QLabel("Share a bug report or idea. Do not include game PGNs or sensitive information."))
-        category=QComboBox();category.addItem("Bug report","bug");category.addItem("Feature suggestion","feature");layout.addWidget(category)
-        message=QTextEdit();message.setPlaceholderText("What happened, or what would you like to see?");message.setMaximumHeight(180);layout.addWidget(message)
-        status=QLabel();status.setObjectName("Muted");status.setWordWrap(True);layout.addWidget(status)
-        buttons=QHBoxLayout();buttons.addStretch();cancel=QPushButton("Cancel");cancel.clicked.connect(dialog.reject);buttons.addWidget(cancel)
-        send=QPushButton("Send");buttons.addWidget(send);layout.addLayout(buttons)
+        dialog=FeedbackDialog(self.store,None,self)
 
-        def submit_feedback():
-            try:payload=make_feedback(self.store,category.currentData(),message.toPlainText())
-            except ValueError as exc:
-                status.setText(str(exc));return
-            send.setEnabled(False);cancel.setEnabled(False);send.setText("Sending…")
-            status.setText("Sending securely…")
-            self.feedback_button.setEnabled(False);self.feedback_note.setText("Sending feedback…")
-            worker=ReportingWorker("feedback",payload,self);self._feedback_worker=worker
+        def update_note(ok,_error):
+            self.feedback_note.setText("Thanks. Your feedback was sent to the maintainer dashboard."
+                                       if ok else "The feedback could not be sent. Your message remains in the form for retry.")
 
-            def finish(ok,_error):
-                self.feedback_button.setEnabled(True);cancel.setEnabled(True);send.setEnabled(True);send.setText("Send")
-                if ok:
-                    self.feedback_note.setText("Thanks. Your feedback was sent.")
-                    dialog.accept()
-                else:
-                    self.feedback_note.setText("Feedback could not be sent.")
-                    status.setText("Could not send. Your message is still here; check the connection and retry.")
-
-            worker.finished_with_result.connect(finish);worker.start()
-
-        send.clicked.connect(submit_feedback)
-        dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-        dialog.open()
+        dialog.completed.connect(update_note)
+        dialog.exec()
 
     def _load_chesscom_on_tab(self,index):
         if index!=self.tabs.indexOf(self.chesscom_scroll) or self._chesscom_data_loaded:return
@@ -1330,6 +1310,9 @@ class ProfileDialog(QDialog):
 
     def refresh(self):
         self.all_records=self.store.games()
+        try:puzzle_high_score=max(0,int(self.store.get_setting("puzzle_challenge_high_score","0") or 0))
+        except (TypeError,ValueError):puzzle_high_score=0
+        self.puzzle_high_score.setText(f"Puzzle challenge high score: {puzzle_high_score} puzzles")
         stats_by_game={}
         for game in self.all_records:
             try:stats=json.loads(game.get("stats_json") or "{}")
@@ -1460,8 +1443,6 @@ class ProfileDialog(QDialog):
 
     def closeEvent(self,event):
         if self._chesscom_worker and self._chesscom_worker.isRunning():self._chesscom_worker.cancel()
-        for worker in (getattr(self,"_feedback_worker",None),getattr(self,"_reporting_worker",None)):
-            if worker and worker.isRunning():worker.wait(6500)
         if self._castling_scan_worker and self._castling_scan_worker.isRunning():
             self._castling_scan_worker.requestInterruption();self._castling_scan_worker.wait(2000)
         super().closeEvent(event)

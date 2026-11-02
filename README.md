@@ -2,6 +2,10 @@
 
 A local chess analysis app built with PyQt6, `python-chess`, and Stockfish. Game records and PGNs stay on this computer. With reporting enabled, the app sends an installation check-in containing a random install ID, app version, last-seen time, and saved Chess.com username. You can turn check-ins off in **Profile → Overview**. Bug reports and feature suggestions are sent only when you submit them. Neither feature sends game history or PGNs.
 
+The **Position Lab** tab accepts a FEN and shows Stockfish's top three candidate moves for White and Black, with each side's evaluation and principal variation.
+
+The **Puzzles** tab offers engine focused tactics, total random puzzles, training based on downloaded Chess.com games and review weaknesses, forced mate challenges, and an escalating challenge run. Each puzzle has three lives. The challenge high score is saved in the local profile and shown in Profile.
+
 ## Run the app
 
 Requirements: Python 3.10 or newer, PyQt6, `python-chess`, `cryptography`, and a Stockfish 19 compatible engine.
@@ -33,6 +37,7 @@ The app looks for `stockfish.exe` beside `main.py`. Set the `STOCKFISH_PATH` env
 │       ├── main_window.py        # Main application window
 │       ├── profile_dialog.py     # Profile, dashboard, and Chess.com controls
 │       ├── review_dialogs.py     # Game review and coaching dialogs
+│       ├── position_lab.py       # FEN input and top-move comparison for both sides
 │       ├── board.py              # Chessboard presentation and interaction
 │       ├── charts.py             # Profile charts
 │       ├── theme.py              # Board themes and piece styles

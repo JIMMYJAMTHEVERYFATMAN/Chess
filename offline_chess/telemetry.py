@@ -15,6 +15,10 @@ _EVENT_ENDPOINTS = {
     "checkin": "/api/checkin",
     "feedback": "/api/feedback",
 }
+FEEDBACK_RATE_SETTING = "feedback_send_timestamps"
+FEEDBACK_DAILY_LIMIT = 5
+FEEDBACK_COOLDOWN_SECONDS = 60
+FEEDBACK_WINDOW_SECONDS = 24 * 60 * 60
 
 
 def ensure_install_id(store):
@@ -80,6 +84,20 @@ def make_feedback(store, category: str, message: str):
     message = str(message).strip()
     if not message or len(message) > 3000:
         raise ValueError("Please enter a message of 1 to 3,000 characters.")
+    now = datetime.now(timezone.utc).timestamp()
+    try:
+        saved = json.loads(store.get_setting(FEEDBACK_RATE_SETTING, "[]") or "[]")
+        timestamps = [float(value) for value in saved
+                      if isinstance(value, (int, float)) and 0 <= now - float(value) < FEEDBACK_WINDOW_SECONDS]
+    except (TypeError, ValueError):
+        timestamps = []
+    if timestamps and now - max(timestamps) < FEEDBACK_COOLDOWN_SECONDS:
+        wait_seconds = FEEDBACK_COOLDOWN_SECONDS - int(now - max(timestamps))
+        raise ValueError(f"Please wait {wait_seconds} seconds before sending another message.")
+    if len(timestamps) >= FEEDBACK_DAILY_LIMIT:
+        raise ValueError("You’ve reached the limit of 5 feedback messages per 24 hours.")
+    timestamps.append(now)
+    store.set_setting(FEEDBACK_RATE_SETTING, json.dumps(timestamps, separators=(",", ":")))
     return {
         "event_id": str(uuid.uuid4()),
         "install_id": ensure_install_id(store),

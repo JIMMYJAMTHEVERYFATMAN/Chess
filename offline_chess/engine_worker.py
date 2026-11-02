@@ -1,6 +1,7 @@
 """Stockfish process lifecycle and chess review analysis worker."""
 from __future__ import annotations
 
+import hashlib
 import random
 import threading
 import time
@@ -15,6 +16,7 @@ import chess.pgn
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 
 from .config import MAX_ELO, MIN_ELO, MIN_TARGET_ELO, STOCKFISH_PATH
+from .openings import position_key
 from .review_logic import *
 
 class EngineWorker(QObject):
@@ -27,6 +29,7 @@ class EngineWorker(QObject):
     review_done = pyqtSignal(int, object, bool)
     practice_analysis_done = pyqtSignal(object)
     explore_done = pyqtSignal(object)
+    position_analysis_done = pyqtSignal(object)
     puzzle_progress = pyqtSignal(int, int, int)
     puzzle_done = pyqtSignal(int, object, str)
     operation_error = pyqtSignal(str)
@@ -744,66 +747,231 @@ class EngineWorker(QObject):
         except Exception as exc:self.operation_error.emit(f"Opening explorer failed: {exc}")
 
     @pyqtSlot(object)
+    def analyze_position(self, task):
+        token, source_board, budget = task
+        fen = source_board.fen()
+        restore = {}
+        results = {}
+        error = ""
+        try:
+            if not self.engine:
+                raise RuntimeError("Stockfish has not started")
+            budget = max(.05, min(15.0, float(budget)))
+            full_strength = {}
+            if "UCI_LimitStrength" in self.option_names:
+                full_strength["UCI_LimitStrength"] = False
+                restore["UCI_LimitStrength"] = True
+            if "UCI_Elo" in self.option_names:
+                option = self.engine.options["UCI_Elo"]
+                full_strength["UCI_Elo"] = int(option.max or self._uci_elo_max)
+                restore["UCI_Elo"] = max(self._uci_elo_min, min(self._uci_elo_max, self._elo))
+            if "Skill Level" in self.option_names:
+                option = self.engine.options["Skill Level"]
+                full_strength["Skill Level"] = int(option.max or 20)
+                skill = (0 if self._elo < MIN_ELO else
+                         round((self._elo - MIN_ELO) / (MAX_ELO - MIN_ELO) * 20))
+                restore["Skill Level"] = max(int(option.min or 0), min(int(option.max or 20), skill))
+            if full_strength:
+                self.engine.configure(full_strength)
+
+            for color, label in ((chess.WHITE, "White"), (chess.BLACK, "Black")):
+                position = source_board.copy(stack=False)
+                position.turn = color
+                legal_moves = list(position.legal_moves)
+                if not legal_moves:
+                    results[label] = []
+                    continue
+
+                candidate_lines = []
+                multipv = min(3, self._multipv_max)
+                if "MultiPV" in self.option_names and multipv > 1:
+                    analyzed = self.engine.analyse(
+                        position, chess.engine.Limit(time=budget), multipv=multipv)
+                    candidate_lines.extend(analyzed if isinstance(analyzed, list) else [analyzed])
+
+                seen = {
+                    line.get("pv", [None])[0]
+                    for line in candidate_lines
+                    if line.get("pv") and line.get("pv")[0] in position.legal_moves
+                }
+                # Stockfish normally supports MultiPV >= 3. If it does not, or
+                # returns fewer usable lines than requested, ask for the next
+                # best move while excluding candidates already found.
+                while len(seen) < min(3, len(legal_moves)):
+                    remaining = [move for move in legal_moves if move not in seen]
+                    if not remaining:
+                        break
+                    info = self.engine.analyse(
+                        position, chess.engine.Limit(time=budget), root_moves=remaining)
+                    pv = info.get("pv", [])
+                    if not pv or pv[0] not in remaining:
+                        break
+                    seen.add(pv[0])
+                    candidate_lines.append(info)
+
+                rows = []
+                for line in candidate_lines:
+                    pv = line.get("pv", [])
+                    if not pv or pv[0] not in position.legal_moves:
+                        continue
+                    move = pv[0]
+                    if any(row["move"] == move for row in rows):
+                        continue
+                    side_score = line["score"].pov(color)
+                    mate = side_score.mate()
+                    if mate is not None:
+                        score_text = (f"+M{mate}" if mate > 0 else
+                                      f"−M{abs(mate)}" if mate < 0 else "M0")
+                    else:
+                        score_text = eval_text(int(side_score.score() or 0))
+                    pv_board = position.copy(stack=False)
+                    san_line = []
+                    for pv_move in pv[:8]:
+                        if pv_move not in pv_board.legal_moves:
+                            break
+                        san_line.append(pv_board.san(pv_move))
+                        pv_board.push(pv_move)
+                    rows.append({
+                        "move": move,
+                        "san": position.san(move),
+                        "eval": score_text,
+                        "pv": " ".join(san_line),
+                        "pv_uci": [pv_move.uci() for pv_move in pv[:8]],
+                        "score": side_score.score(mate_score=100_000),
+                    })
+                rows.sort(key=lambda row: row["score"] if row["score"] is not None else -100_001,
+                          reverse=True)
+                results[label] = rows[:3]
+        except Exception as exc:
+            error = str(exc) or "Stockfish could not analyze this position."
+        finally:
+            if restore and self.engine:
+                try:
+                    self.engine.configure(restore)
+                except Exception as exc:
+                    self.operation_error.emit(f"Could not restore opponent strength after position analysis: {exc}")
+        self.position_analysis_done.emit({
+            "token": token,
+            "fen": fen,
+            "results": results,
+            "error": error,
+        })
+
+    @pyqtSlot(object)
     def generate_puzzle(self,task):
-        token,skill,difficulty,source_fens,challenge_mode,recent_themes=task
+        token,request=task
+        mode=request.get("mode","focus")
+        skill=request.get("skill","Any tactic")
+        phase=request.get("phase","")
+        if mode=="personal":phase=request.get("personal_phase",phase)
+        piece_focus=request.get("piece","")
+        challenge_mode=bool(request.get("challenge",False))
+        source=request.get("source","generated")
+        challenge_score=max(0,int(request.get("challenge_score",0)))
+        difficulty=max(1,min(10,int(request.get("difficulty",5))))
+        mate_in=max(0,min(5,int(request.get("mate_in",0))))
+        source_positions=request.get("source_positions",[])
+        recent_themes=request.get("recent_themes",[])
         try:
             if not self.engine:raise RuntimeError("Stockfish is not available")
-            difficulty=max(1,min(10,int(difficulty)))
+            source_fens=sorted(str(item.get("fen","")) if isinstance(item,dict) else str(item)
+                               for item in source_positions)
+            recent_fens=set(request.get("recent_fens",[]))
+            seed_material="|".join(("offline-chess-puzzle-v2",mode,source,skill,phase,piece_focus,
+                                    str(difficulty),str(mate_in),str(challenge_score),
+                                    str(challenge_score if challenge_mode else request.get("token",0)),
+                                    ",".join(source_fens),
+                                    ",".join(map(str,recent_themes))))
+            rng=random.Random(hashlib.sha256(seed_material.encode("utf-8")).hexdigest())
             candidates=[];seen=set()
-            for fen in source_fens:
+            for item in source_positions if source=="games" else []:
+                if isinstance(item,dict):fen=item.get("fen");source_label=item.get("source","a saved game")
+                else:fen=item;source_label="a saved game"
                 try:board=chess.Board(fen)
                 except (ValueError,TypeError):continue
                 key=position_key(board)
-                if key not in seen and not board.is_game_over() and len(board.piece_map())>=8:
-                    seen.add(key);candidates.append((board,"one of your games"))
-            random_count=(16+difficulty*2) if challenge_mode else (8+difficulty*2)
+                if key not in seen and board.fen() not in recent_fens and not board.is_game_over() and len(board.piece_map())>=6:
+                    seen.add(key);candidates.append((board,source_label,item if isinstance(item,dict) else {}))
+            random_count=((24+difficulty*3) if challenge_mode else (12+difficulty*2)) if source=="generated" else 0
+            if mode=="mate" and source=="generated":random_count=max(random_count,12+mate_in*5)
             for _ in range(random_count):
-                board=chess.Board();target_plies=random.randint(18,52+difficulty*2)
+                board=chess.Board();target_plies=rng.randint(8,52+difficulty*2)
                 for _ply in range(target_plies):
                     if board.is_game_over():break
                     legal=list(board.legal_moves)
                     if not legal:break
-                    board.push(random.choice(legal))
+                    board.push(rng.choice(legal))
                 key=position_key(board)
-                if key not in seen and not board.is_game_over() and len(board.piece_map())>=8:
-                    seen.add(key);candidates.append((board,"a generated legal game position"))
-            random.shuffle(candidates)
-            attempts=min(len(candidates),(16+difficulty*2) if challenge_mode else (14+difficulty*2))
+                if key not in seen and board.fen() not in recent_fens and not board.is_game_over() and len(board.piece_map())>=8:
+                    seen.add(key);candidates.append((board,"a generated legal game position",{}))
+            rng.shuffle(candidates)
+            attempts=min(len(candidates),(24+difficulty*3) if challenge_mode else (18+difficulty*2))
             if challenge_mode:
+                if source=="generated":candidates=[item for item in candidates if item[1]=="a generated legal game position"]
+                attempts=min(len(candidates),min(30,18+difficulty))
+            if mode=="random" and source=="generated":
                 candidates=[item for item in candidates if item[1]=="a generated legal game position"]
-                attempts=min(len(candidates),16+difficulty*2)
-            else:
-                generated=[item for item in candidates if item[1]=="a generated legal game position"]
-                saved=[item for item in candidates if item[1]=="one of your games"]
-                generated_count=min(len(generated),max(4,attempts//2))
-                chosen=random.sample(generated,generated_count) if generated_count else []
-                saved_count=min(len(saved),attempts-len(chosen))
-                if saved_count:chosen.extend(random.sample(saved,saved_count))
-                random.shuffle(chosen);candidates=chosen;attempts=len(candidates)
+                attempts=min(len(candidates),20+difficulty*2)
+            elif mode=="personal" and source=="games":
+                candidates=[item for item in candidates if item[1]=="a downloaded Chess.com game"]
+                candidates.sort(key=lambda item:(not item[2].get("mistake",False),item[0].fen()))
+                attempts=min(len(candidates),max(12,30+difficulty*3))
+            elif mode=="mate":
+                # The caller chooses saved PGNs or scratch positions for every mode.
+                attempts=min(len(candidates),12+mate_in*5)
             full_strength={}
             if "UCI_LimitStrength" in self.option_names:full_strength["UCI_LimitStrength"]=False
             if "Skill Level" in self.option_names:full_strength["Skill Level"]=20
             restore={}
+            if "Threads" in self.option_names:
+                full_strength["Threads"]=1
+                restore["Threads"]=max(1,int(self.engine.options["Threads"].default or 1))
             if "UCI_LimitStrength" in self.option_names:restore["UCI_LimitStrength"]=True
             if "UCI_Elo" in self.option_names:restore["UCI_Elo"]=max(self._uci_elo_min,min(self._uci_elo_max,self._elo))
+            if "UCI_Elo" in self.option_names:
+                option=self.engine.options["UCI_Elo"]
+                full_strength["UCI_Elo"]=int(option.max or self._uci_elo_max)
             if "Skill Level" in self.option_names:
                 skill_level=0 if self._elo<MIN_ELO else round((self._elo-MIN_ELO)/(MAX_ELO-MIN_ELO)*20)
                 option=self.engine.options["Skill Level"]
                 restore["Skill Level"]=max(int(option.min or 0),min(int(option.max or 20),skill_level))
             if full_strength:self.engine.configure(full_strength)
-            puzzle=None;best_match=None;challenge_pool=[];target_gap=max(12,120-10*(difficulty-1));budget=.10+.025*difficulty
+            puzzle=None;best_match=None;challenge_pool=[]
+            target_gap=max(5,130-11*(difficulty-1)-3*max(0,challenge_score-9))
+            budget=(max(.45,min(1.1,.35+.15*mate_in)) if mode=="mate" else
+                    min(.9,.16+.04*difficulty+.01*max(0,challenge_score-9)) if challenge_mode else .16+.04*difficulty)
             try:
-                for index,(board,source_label) in enumerate(candidates[:attempts],1):
+                for index,(board,source_label,metadata) in enumerate(candidates[:attempts],1):
                     if self.stop_event.is_set():break
                     multipv=min(3,self._multipv_max)
-                    info=self.engine.analyse(board,chess.engine.Limit(time=budget),multipv=multipv) if "MultiPV" in self.option_names else self.engine.analyse(board,chess.engine.Limit(time=budget))
+                    limit=chess.engine.Limit(time=budget)
+                    info=self.engine.analyse(board,limit,multipv=multipv) if "MultiPV" in self.option_names else self.engine.analyse(board,limit)
                     lines=info if isinstance(info,list) else [info]
                     lines=[line for line in lines if line.get("pv") and line["pv"][0] in board.legal_moves and line.get("score")]
                     self.puzzle_progress.emit(token,index,attempts)
                     if not lines:continue
                     best_line=lines[0];best_move=best_line["pv"][0];themes=tactical_themes(board,best_move)
-                    if best_line["score"].pov(board.turn).mate() is not None:themes.add("Mate")
-                    if (skill!="Any tactic" and skill not in themes) or (challenge_mode and not themes):continue
+                    if board.is_castling(best_move):themes.add("Castling")
+                    mate_score=best_line["score"].pov(board.turn).mate()
+                    if mate_score is not None:themes.add("Mate")
+                    if mode=="mate" and (mate_score is None or mate_score<=0 or mate_score>mate_in):continue
+                    if mode=="focus" and skill!="Any tactic" and skill not in themes:continue
+                    if mode=="focus" and skill=="Any tactic" and not themes:continue
+                    if mode=="focus" and phase:
+                        fullmove=metadata.get("move_number",board.fullmove_number)
+                        candidate_phase=metadata.get("phase",game_phase(board))
+                        if phase=="Opening" and not (candidate_phase=="Opening" and 3<=fullmove<=6):continue
+                        if phase!="Opening" and candidate_phase!=phase:continue
+                    if mode=="focus" and piece_focus:
+                        moving_piece=board.piece_at(best_move.from_square)
+                        if not moving_piece or moving_piece.symbol().lower()!=piece_focus:continue
+                    personal_skill_match=(skill=="Any tactic" or skill in themes)
+                    candidate_phase=metadata.get("phase",game_phase(board))
+                    fullmove=metadata.get("move_number",board.fullmove_number)
+                    personal_phase_match=(not phase or
+                                          (candidate_phase=="Opening" and 3<=fullmove<=6 if phase=="Opening"
+                                           else candidate_phase==phase))
+                    if challenge_mode and not themes:continue
                     best_score=best_line["score"].pov(board.turn).score(mate_score=10000)
                     if best_score is None:continue
                     second_score=lines[1]["score"].pov(board.turn).score(mate_score=10000) if len(lines)>1 else best_score-100
@@ -814,17 +982,35 @@ class EngineWorker(QObject):
                     for pv_move in pv:
                         if pv_move not in pv_board.legal_moves:break
                         pv_sans.append(pv_board.san(pv_move));pv_board.push(pv_move)
-                    theme_order=("Mate","Fork","Pin","Skewer","Discovered attack","Promotion","Check","Winning material")
+                    theme_order=("Mate","Castling","Fork","Pin","Skewer","Discovered attack","Promotion","Check","Winning material")
                     available_themes=[name for name in theme_order if name in themes]
                     fresh_themes=[name for name in available_themes if name not in recent_themes]
-                    theme=skill if skill!="Any tactic" else next(iter(fresh_themes or available_themes),"Tactic")
+                    theme=(skill if skill!="Any tactic" and (mode!="personal" or personal_skill_match)
+                           else next(iter(fresh_themes or available_themes),"Tactic"))
                     candidate_puzzle={"fen":board.fen(),"move":best_move.uci(),"san":board.san(best_move),"theme":theme,
                                       "themes":sorted(themes),"pv":pv_sans,"difficulty":difficulty,"gap":gap,"source":source_label,
-                                      "difficulty_match":abs(gap-target_gap)<=40}
+                                      "difficulty_match":abs(gap-target_gap)<=40,
+                                      "mate_in":mate_score if mate_score and mate_score>0 else None}
                     candidate_puzzle["difficulty_distance"]=abs(gap-target_gap)
+                    if mode=="mate":
+                        candidate_puzzle["difficulty_distance"]=(mate_in-mate_score)*10000+abs(gap-target_gap)
+                    if mode=="personal":
+                        candidate_puzzle["difficulty_distance"]+=((0 if personal_skill_match else 5000)
+                                                                    +(0 if personal_phase_match else 2500))
                     if best_match is None or candidate_puzzle["difficulty_distance"]<best_match["difficulty_distance"]:best_match=candidate_puzzle
+                    if mode=="mate" and mate_score==mate_in:
+                        puzzle=candidate_puzzle
+                        break
                     if candidate_puzzle["difficulty_match"]:
-                        if challenge_mode:challenge_pool.append(candidate_puzzle)
+                        if challenge_mode:
+                            challenge_pool.append(candidate_puzzle)
+                            if candidate_puzzle["theme"] not in recent_themes:break
+                        elif mode=="mate":
+                            if puzzle is None or candidate_puzzle.get("mate_in",0)>puzzle.get("mate_in",0):puzzle=candidate_puzzle
+                        elif mode=="personal":
+                            if personal_skill_match and personal_phase_match:
+                                puzzle=candidate_puzzle
+                                break
                         else:puzzle=candidate_puzzle;break
             finally:
                 if restore:self.engine.configure(restore)
@@ -833,9 +1019,13 @@ class EngineWorker(QObject):
                 pool=varied or challenge_pool
                 best_distance=min(item["difficulty_distance"] for item in pool)
                 closest=[item for item in pool if item["difficulty_distance"]<=best_distance+15]
-                puzzle=random.choice(closest)
+                puzzle=rng.choice(closest)
             if puzzle is None:puzzle=best_match
-            self.puzzle_done.emit(token,puzzle,"" if puzzle else "No matching position found this time. Try another difficulty, import or save more games, or choose Any tactic.")
+            if mode=="mate":error="No forced mate was found at that distance. Try a shorter mate target or generate another position."
+            elif mode=="personal":error="No suitable move was found in the downloaded games. Review more games or generate another puzzle."
+            elif mode=="focus":error="No position matched that focus this time. Try a different theme, phase, or piece."
+            else:error="No suitable random puzzle was found this time. Generate another puzzle."
+            self.puzzle_done.emit(token,puzzle,"" if puzzle else error)
         except Exception as exc:
             self.puzzle_done.emit(token,None,f"Puzzle generation failed: {exc}")
 

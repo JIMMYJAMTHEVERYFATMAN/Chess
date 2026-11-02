@@ -635,7 +635,8 @@ class ProfileStore:
         db=self.connect()
         try:
             imported=[row[0] for row in db.execute("SELECT pgn_path FROM chesscom_games")]
-            db.execute("DELETE FROM games");db.execute("DELETE FROM chesscom_games");db.commit()
+            db.execute("DELETE FROM games");db.execute("DELETE FROM chesscom_games")
+            db.execute("DELETE FROM settings WHERE key='puzzle_challenge_high_score'");db.commit()
         finally:db.close()
         for path in imported:
             try:Path(path).unlink(missing_ok=True)
