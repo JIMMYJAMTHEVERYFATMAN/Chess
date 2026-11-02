@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 from .build_config import USAGE_REPORT_URL as BUILT_USAGE_REPORT_URL
 
-APP_VERSION = "0.10.4"
+APP_VERSION = "0.10.5"
 IS_FROZEN = bool(getattr(sys, "frozen", False))
 BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
 APP_DIR = Path(sys.executable).resolve().parent if IS_FROZEN else BUNDLE_DIR
