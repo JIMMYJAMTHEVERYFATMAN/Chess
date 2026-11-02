@@ -67,7 +67,7 @@ except ImportError as exc:
 from app_updater import UpdateCheckWorker, UpdateDownloadWorker, launch_windows_update
 
 
-APP_VERSION = "0.10.0"
+APP_VERSION = "0.10.1"
 IS_FROZEN = bool(getattr(sys, "frozen", False))
 BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 APP_DIR = Path(sys.executable).resolve().parent if IS_FROZEN else BUNDLE_DIR
