@@ -64,9 +64,14 @@ try:
 except ImportError as exc:
     raise SystemExit("Install PyQt6 first: pip install PyQt6") from exc
 
+from app_updater import UpdateCheckWorker, UpdateDownloadWorker, launch_windows_update
 
-APP_DIR = Path(__file__).resolve().parent
-STOCKFISH_PATH = os.environ.get("STOCKFISH_PATH", str(APP_DIR / ("stockfish.exe" if os.name == "nt" else "stockfish")))
+
+APP_VERSION = "0.10.0"
+IS_FROZEN = bool(getattr(sys, "frozen", False))
+BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+APP_DIR = Path(sys.executable).resolve().parent if IS_FROZEN else BUNDLE_DIR
+STOCKFISH_PATH = os.environ.get("STOCKFISH_PATH", str(BUNDLE_DIR / ("stockfish.exe" if os.name == "nt" else "stockfish")))
 MIN_ELO, MAX_ELO = 1320, 3190  # Stockfish's supported UCI_Elo range.
 MIN_TARGET_ELO = 400           # Lower targets are approximated with weaker move choices.
 NEAR_BEST_EXPECTED_POINTS_TOLERANCE = .01
@@ -2991,7 +2996,7 @@ def _opening_name_key(value):
 def chesscom_opening_catalog():
     """Index bundled Lichess opening names by ECO and normalized display name."""
     by_eco={};by_name={}
-    for path in discover_lichess_files(APP_DIR/"openings"):
+    for path in discover_lichess_files(BUNDLE_DIR/"openings"):
         try:
             with path.open("r",encoding="utf-8-sig",newline="") as source:
                 for row in csv.DictReader(source,delimiter="\t"):
@@ -5456,6 +5461,61 @@ class ChessWindow(QMainWindow):
         self.worker.position_eval.connect(self.evalbar.set_eval)
         self.evaluation_request.connect(self.worker.evaluate_position)
         self._load_default_openings(); self._sync_board()
+        if IS_FROZEN and os.name == "nt":
+            self._update_check_worker=None
+            self._update_download_worker=None
+            QTimer.singleShot(2500,self._check_for_updates)
+
+    def _check_for_updates(self):
+        if self._update_check_worker and self._update_check_worker.isRunning():return
+        self._update_check_worker=UpdateCheckWorker(APP_VERSION,self)
+        self._update_check_worker.update_available.connect(self._offer_update)
+        self._update_check_worker.finished.connect(self._update_check_finished)
+        self._update_check_worker.start()
+
+    def _update_check_finished(self):
+        worker=self._update_check_worker
+        self._update_check_worker=None
+        if worker:worker.deleteLater()
+
+    def _offer_update(self,release):
+        tag=release["tag_name"]
+        answer=QMessageBox.question(
+            self,"Chess update available",
+            f"Version {tag} is available. Download and install it now? The app will restart when the update is ready.",
+            QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes)
+        if answer!=QMessageBox.StandardButton.Yes:return
+        self.statusBar().showMessage(f"Downloading Chess {tag}…")
+        self._update_download_worker=UpdateDownloadWorker(release,self)
+        self._update_download_worker.progress.connect(self._update_download_progress)
+        self._update_download_worker.downloaded.connect(self._install_update)
+        self._update_download_worker.failed.connect(self._update_download_failed)
+        self._update_download_worker.finished.connect(self._update_download_finished)
+        self._update_download_worker.start()
+
+    def _update_download_progress(self,done,total):
+        if total:
+            self.statusBar().showMessage(f"Downloading update… {done*100//total}%")
+        else:
+            self.statusBar().showMessage(f"Downloading update… {done//(1024*1024)} MB")
+
+    def _install_update(self,downloaded_path):
+        try:
+            launch_windows_update(downloaded_path,Path(sys.executable).resolve())
+        except Exception as exc:
+            QMessageBox.critical(self,"Could not install update",str(exc))
+            return
+        self.statusBar().showMessage("Update downloaded. Restarting…")
+        self.close()
+
+    def _update_download_failed(self,message):
+        QMessageBox.warning(self,"Update failed",message)
+
+    def _update_download_finished(self):
+        worker=self._update_download_worker
+        self._update_download_worker=None
+        if worker:worker.deleteLater()
 
     def _setup_engine(self):
         self.thread = QThread(self); self.worker = EngineWorker(self.syzygy_path); self.worker.moveToThread(self.thread)
@@ -5682,7 +5742,7 @@ class ChessWindow(QMainWindow):
 
     def _load_default_openings(self):
         candidates=[]
-        for folder in (APP_DIR,APP_DIR/"openings"):
+        for folder in (BUNDLE_DIR,BUNDLE_DIR/"openings",APP_DIR,APP_DIR/"openings"):
             candidates.extend(discover_lichess_files(folder))
         if candidates: self._load_paths_async(candidates)
 
@@ -6724,7 +6784,7 @@ class ChessWindow(QMainWindow):
     def set_sound(self,on):self.sound_enabled=on
     def _play_sound(self,name):
         if not self.sound_enabled:return
-        path=APP_DIR/"assets"/f"{name}.wav"
+        path=BUNDLE_DIR/"assets"/f"{name}.wav"
         try:
             if not path.is_file():path=self._generated_tone(name)
             if os.name=="nt":

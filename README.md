@@ -16,6 +16,14 @@ python main.py
 
 The app looks for `stockfish.exe` beside `main.py`. Set the `STOCKFISH_PATH` environment variable if the engine is installed elsewhere.
 
+## Windows EXE and updates
+
+Tagged releases build a single `OfflineChess.exe` that includes Stockfish and the Lichess opening database. The app checks the public GitHub Releases page in the background when it starts. If a newer release is available, it offers to download and install it, verifies the published SHA-256 checksum, then restarts with the new version. Run the EXE from a folder your Windows account can write to, such as Downloads or a folder under your user profile.
+
+To publish a release, update `APP_VERSION` in `main.py`, commit the change, create the matching tag (for example `v0.10.0`), and push the tag. GitHub Actions builds and publishes the EXE and checksum. The release tag must match `APP_VERSION`.
+
+The one-file build extracts its engine and opening database into a temporary folder while it runs. Profiles and downloaded games remain in the user's local application data folder, outside the EXE.
+
 Opening names use the [Lichess chess-openings](https://github.com/lichess-org/chess-openings) TSV files in `openings/` (`a.tsv` through `e.tsv`). The profile shows the opening name and its ECO code together, for example `Bird Opening · A02`.
 
 ## Board appearance
