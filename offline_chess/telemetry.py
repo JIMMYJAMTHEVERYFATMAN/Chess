@@ -11,6 +11,11 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from .config import APP_VERSION, USAGE_REPORT_URL
 
+_EVENT_ENDPOINTS = {
+    "checkin": "/api/checkin",
+    "feedback": "/api/feedback",
+}
+
 
 def ensure_install_id(store):
     value = store.get_setting("usage_install_id")
@@ -23,9 +28,12 @@ def ensure_install_id(store):
 def _post(path: str, payload: dict) -> None:
     if not USAGE_REPORT_URL.startswith("https://"):
         raise OSError("Usage reporting service is not configured")
+    endpoint = _EVENT_ENDPOINTS.get(path)
+    if endpoint is None:
+        raise ValueError("Unknown usage reporting event")
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
-        f"{USAGE_REPORT_URL.rstrip('/')}/{path.lstrip('/')}", data=data,
+        f"{USAGE_REPORT_URL.rstrip('/')}{endpoint}", data=data,
         headers={"Content-Type": "application/json", "User-Agent": f"OfflineChess/{APP_VERSION}"},
         method="POST",
     )

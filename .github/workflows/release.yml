@@ -52,7 +52,7 @@ jobs:
 
       - name: Run test suite
         shell: pwsh
-        run: '& $env:OFFLINE_CHESS_BUILD_PYTHON -m unittest test_review_analysis -q'
+        run: '& $env:OFFLINE_CHESS_BUILD_PYTHON -m unittest test_review_analysis test_telemetry -q'
 
       - name: Configure public check-in collector URL
         shell: pwsh
