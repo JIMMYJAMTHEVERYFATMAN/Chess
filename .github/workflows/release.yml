@@ -247,8 +247,17 @@ jobs:
             libxcb-util1 libxcb1 libxkbcommon0 libxkbcommon-x11-0 zlib1g
           build_venv="$RUNNER_TEMP/offline-chess-build-venv"
           if [[ "${{ matrix.deb_arch }}" == "arm64" ]]; then
-            sudo apt-get install -y python3-dev python3-pyqt6 python3-venv
-            python3 -m venv --system-site-packages "$build_venv"
+            micromamba_dir="$RUNNER_TEMP/micromamba-bin"
+            mkdir -p "$micromamba_dir"
+            curl --fail --location --retry 3 \
+              https://micro.mamba.pm/api/micromamba/linux-aarch64/latest \
+              | tar -xvj -C "$micromamba_dir" --strip-components=1 bin/micromamba
+            chmod 0755 "$micromamba_dir/micromamba"
+            echo "$micromamba_dir" >> "$GITHUB_PATH"
+            echo "MAMBA_ROOT_PREFIX=$RUNNER_TEMP/mamba-root" >> "$GITHUB_ENV"
+            export MAMBA_ROOT_PREFIX="$RUNNER_TEMP/mamba-root"
+            "$micromamba_dir/micromamba" create -y -p "$build_venv" --override-channels -c conda-forge \
+              python=3.12 pyqt6=6.11.0 pip
           else
             python -m venv "$build_venv"
           fi
@@ -263,9 +272,17 @@ jobs:
               python-chess==1.999 chess==1.11.2 "cryptography>=44.0.0,<48.0.0"
           fi
           echo "OFFLINE_CHESS_BUILD_PYTHON=$build_venv/bin/python" >> "$GITHUB_ENV"
+          if [[ "${{ matrix.deb_arch }}" == "arm64" ]]; then
+            echo "MAMBA_ENV=$build_venv" >> "$GITHUB_ENV"
+          fi
 
       - name: Run test suite
-        run: '"$OFFLINE_CHESS_BUILD_PYTHON" -m unittest test_review_analysis test_telemetry -q'
+        run: |
+          if [[ "${{ matrix.deb_arch }}" == "arm64" ]]; then
+            micromamba run -p "$MAMBA_ENV" python -m unittest test_review_analysis test_telemetry -q
+          else
+            "$OFFLINE_CHESS_BUILD_PYTHON" -m unittest test_review_analysis test_telemetry -q
+          fi
 
       - name: Configure public check-in collector URL
         env:
@@ -307,11 +324,19 @@ jobs:
 
       - name: Build and smoke-test Linux application
         run: |
-          "$OFFLINE_CHESS_BUILD_PYTHON" -m PyInstaller --noconfirm --clean --onefile \
-            --name OfflineChess \
-            --add-binary "stockfish:." \
-            --add-data "openings:openings" \
-            main.py
+          if [[ "${{ matrix.deb_arch }}" == "arm64" ]]; then
+            micromamba run -p "$MAMBA_ENV" python -m PyInstaller --noconfirm --clean --onefile \
+              --name OfflineChess \
+              --add-binary "stockfish:." \
+              --add-data "openings:openings" \
+              main.py
+          else
+            "$OFFLINE_CHESS_BUILD_PYTHON" -m PyInstaller --noconfirm --clean --onefile \
+              --name OfflineChess \
+              --add-binary "stockfish:." \
+              --add-data "openings:openings" \
+              main.py
+          fi
           set +e
           timeout 20s xvfb-run -a ./dist/OfflineChess
           app_status=$?
