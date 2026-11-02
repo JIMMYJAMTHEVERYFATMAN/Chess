@@ -67,7 +67,7 @@ except ImportError as exc:
 from app_updater import UpdateCheckWorker, UpdateDownloadWorker, launch_windows_update
 
 
-APP_VERSION = "0.10.1"
+APP_VERSION = "0.10.2"
 IS_FROZEN = bool(getattr(sys, "frozen", False))
 BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 APP_DIR = Path(sys.executable).resolve().parent if IS_FROZEN else BUNDLE_DIR
@@ -81,6 +81,9 @@ BRILLIANT_MAX_EXPECTED_POINTS_LOSS = .02
 BRILLIANT_MIN_REPORTED_GAP = .04
 BRILLIANT_MIN_UNIQUENESS_GAP = .05
 REVIEW_ANALYSIS_VERSION = 13
+CHESSCOM_BATCH_REVIEW_BUDGET = .08
+ACCURACY_CALIBRATION_EXPONENT = 5.0
+ACCURACY_MODEL_VERSION = "caps2-inspired-v1"
 GREAT_ONLY_MAX_PREMOVE_EXPECTED_POINTS = .75
 GREAT_ONLY_MIN_POSTMOVE_EXPECTED_POINTS = .50
 GREAT_ONLY_MIN_ALTERNATIVE_GAP = .15
@@ -149,19 +152,45 @@ def expected_points(cp_white: int) -> float:
     return 1.0/(1.0+math.exp(-bounded/500.0))
 
 
-MOVE_QUALITY_TOOLTIP=("Move quality is the average expected score retained per move: "
-                      "100 × (1 − expected score lost). Stockfish evaluations are mapped "
-                      "to a 0–1 expected score with 1 / (1 + e^(−cp/500)), capped at ±40 pawns. "
-                      "It reflects engine-evaluation changes, not a player rating.")
+MOVE_QUALITY_TOOLTIP=("Local accuracy is a CAPS2-inspired grade based on Stockfish's expected-score loss. "
+                      "The nonlinear grade scale gives small errors a visible cost, so it is not a literal "
+                      "percentage of expected score retained and is not Chess.com's exact CAPS2 formula.")
 REVIEW_IMPACT_TOOLTIP=("Impact compares the played move with Stockfish's top line. "
                        "Expected-score loss is shown in percentage points (pp); the centipawn gap is separate.")
 
 
-def move_accuracy(loss: int = 0, ep_loss: Optional[float] = None) -> float:
-    """Per-move quality estimate from expected-points retained, with mate-safe fallback."""
+def raw_move_accuracy(loss: int = 0, ep_loss: Optional[float] = None) -> float:
+    """Uncalibrated expected-score retention used as input to the local accuracy grade."""
     if ep_loss is not None:
         return max(0.0,min(100.0,100.0*(1.0-max(0.0,min(1.0,ep_loss)))))
     return max(0.0,min(100.0,100.0*math.exp(-.0035*min(1500,max(0,loss)))))
+
+
+def calibrate_accuracy(raw_score: float) -> float:
+    """Compress the high end of expected-score retention into a more useful grade scale."""
+    bounded=max(0.0,min(100.0,float(raw_score)))
+    return 100.0*(bounded/100.0)**ACCURACY_CALIBRATION_EXPONENT
+
+
+def uncalibrate_accuracy(grade: float) -> float:
+    bounded=max(0.0,min(100.0,float(grade)))
+    return 100.0*(bounded/100.0)**(1.0/ACCURACY_CALIBRATION_EXPONENT)
+
+
+def move_accuracy(loss: int = 0, ep_loss: Optional[float] = None) -> float:
+    """Per-move CAPS2-inspired quality grade, with mate-safe fallback."""
+    return calibrate_accuracy(raw_move_accuracy(loss,ep_loss))
+
+
+def review_accuracy(moves) -> Optional[float]:
+    """Calibrate a game's mean raw move retention once, avoiding top-heavy raw averages."""
+    if not moves:return None
+    raw_values=[]
+    for move in moves:
+        grade=getattr(move,"accuracy",None)
+        raw_values.append(uncalibrate_accuracy(grade) if grade is not None else
+                          raw_move_accuracy(getattr(move,"loss",0),getattr(move,"expected_loss",None)))
+    return calibrate_accuracy(sum(raw_values)/len(raw_values))
 
 
 def format_review_impact(expected_loss: float, cp_loss: int) -> str:
@@ -645,6 +674,16 @@ def review_game_narrative(items: list[ReviewMove],
 def game_phase(board: chess.Board) -> str:
     non_pawn_material=sum(VALUES[p.piece_type] for p in board.piece_map().values() if p.piece_type!=chess.PAWN and p.piece_type!=chess.KING)
     return "Opening" if board.fullmove_number<=12 else "Endgame" if non_pawn_material<=13 else "Middlegame"
+
+
+def castling_timing_label(phase,ply):
+    if phase=="Opening":
+        try:move_number=max(1,(int(ply)+1)//2)
+        except (TypeError,ValueError):return "Opening · move unknown"
+        if move_number<3:return "Opening · moves 1–2"
+        if move_number<=6:return f"Opening · move {move_number}"
+        return "Opening · move 7+"
+    return phase if phase in ("Middlegame","Endgame") else "Did not castle"
 
 
 def describe_move(before: chess.Board, move: chess.Move, after: chess.Board,
@@ -1786,13 +1825,13 @@ def player_review_overview(items: list[ReviewMove], user_color: chess.Color) -> 
     """Summarize player-only move quality by phase and their biggest swing."""
     own=[item for item in items if (item.side=="White") == (user_color==chess.WHITE)]
     if not own:return "No moves from your side were available in this review."
-    accuracy=sum(item.accuracy for item in own)/len(own)
+    accuracy=review_accuracy(own)
     biggest=max(own,key=lambda item:item.expected_loss)
     phase_scores=[]
     for phase in ("Opening","Middlegame","Endgame"):
         phase_moves=[item for item in own if getattr(item,"phase","")==phase]
         if phase_moves:
-            score=sum(item.accuracy for item in phase_moves)/len(phase_moves)
+            score=review_accuracy(phase_moves)
             phase_scores.append(f"{phase} {score:.0f}% ({len(phase_moves)} moves)")
     phase_text=" · By phase: "+", ".join(phase_scores) if phase_scores else ""
     return (f"Your move quality: {accuracy:.0f}%{phase_text} · Your biggest swing was your {biggest.san} "
@@ -3062,6 +3101,14 @@ def normalize_chesscom_username(value: str) -> str:
     return username
 
 
+def chesscom_game_identifier(game):
+    if not isinstance(game,dict):return ""
+    identifier=str(game.get("url","")).strip() or str(game.get("uuid","")).strip()
+    if identifier:return identifier
+    pgn=game.get("pgn")
+    return hashlib.sha256(pgn.encode("utf-8")).hexdigest() if isinstance(pgn,str) and pgn else ""
+
+
 def validate_chesscom_archive_url(value: str) -> str:
     parsed=urllib.parse.urlparse(str(value))
     if (parsed.scheme!="https" or parsed.hostname!="api.chess.com"
@@ -3122,9 +3169,12 @@ class ChessComFetchWorker(QThread):
     failed=pyqtSignal(str)
     all_finished=pyqtSignal()
 
-    def __init__(self,operation,username,archive_url="",opponents=None,parent=None):
+    def __init__(self,operation,username,archive_url="",opponents=None,parent=None,
+                 known_game_ids=None,minimum_archive_month=""):
         super().__init__(parent);self.operation=operation;self.cancel_event=threading.Event()
         self.username=normalize_chesscom_username(username);self.archive_url=archive_url;self.opponents=list(opponents or [])
+        self.known_game_ids=set(known_game_ids or ());self.minimum_archive_month=str(minimum_archive_month or "")
+        self.new_games_added=0;self.archives_checked=0
 
     def cancel(self):self.cancel_event.set()
 
@@ -3154,6 +3204,34 @@ class ChessComFetchWorker(QThread):
                     self.month_downloaded.emit(str(archive),games)
                     self.progress.emit(index,len(archives))
                 self.all_finished.emit()
+            elif self.operation=="update":
+                url=f"{CHESSCOM_API_ROOT}/player/{urllib.parse.quote(self.username)}/games/archives"
+                archives=chesscom_request_json(url).get("archives",[])
+                if not isinstance(archives,list):raise ValueError("Chess.com returned an invalid archive list.")
+                relevant=[]
+                for archive in archives:
+                    match=re.search(r"/(\d{4})/(\d{2})/?$",str(archive))
+                    if match and match.group(1)+"-"+match.group(2)>=self.minimum_archive_month:
+                        relevant.append((match.group(1)+"-"+match.group(2),str(archive)))
+                relevant.sort()
+                self.progress.emit(0,len(relevant))
+                seen=set(self.known_game_ids)
+                for index,(_month,archive) in enumerate(relevant,1):
+                    if self.cancel_event.is_set():break
+                    data=chesscom_request_json(validate_chesscom_archive_url(archive))
+                    games=data.get("games",[])
+                    if not isinstance(games,list):raise ValueError(f"Chess.com returned an invalid archive: {archive}")
+                    new_games=[]
+                    for game in games:
+                        game_id=chesscom_game_identifier(game)
+                        if game_id and game_id not in seen:
+                            seen.add(game_id);new_games.append(game)
+                    if new_games:
+                        self.new_games_added+=len(new_games)
+                        self.month_downloaded.emit(archive,new_games)
+                    self.archives_checked=index
+                    self.progress.emit(index,len(relevant))
+                self.all_finished.emit()
             elif self.operation=="countries":
                 country_names={};completed=0;total=len(self.opponents)
                 for index,raw_opponent in enumerate(self.opponents,1):
@@ -3176,6 +3254,35 @@ class ChessComFetchWorker(QThread):
                 self.countries_finished.emit(completed,total)
             else:raise ValueError("Unknown Chess.com download operation.")
         except Exception as exc:self.failed.emit(str(exc))
+
+
+class ChessComCastlingScanWorker(QThread):
+    progress=pyqtSignal(int,int)
+    scan_done=pyqtSignal(object)
+
+    def __init__(self,records,parent=None):
+        super().__init__(parent);self.records=list(records)
+
+    def run(self):
+        results=[];total=len(self.records)
+        for index,record in enumerate(self.records,1):
+            if self.isInterruptionRequested():break
+            game_id=record.get("game_id");phase="Did not castle";castle_ply=None;error=""
+            try:
+                path=Path(record.get("pgn_path") or "")
+                with path.open("r",encoding="utf-8-sig") as source:
+                    game=chess.pgn.read_game(source)
+                if game is None:raise ValueError("PGN contains no game")
+                board=game.board()
+                for ply,move in enumerate(game.mainline_moves(),1):
+                    if board.is_castling(move):
+                        phase=game_phase(board);castle_ply=ply;break
+                    board.push(move)
+            except (OSError,UnicodeError,ValueError,chess.InvalidMoveError,chess.IllegalMoveError) as exc:
+                error=str(exc) or "Could not read PGN"
+            results.append((game_id,phase,castle_ply,error))
+            self.progress.emit(index,total)
+        self.scan_done.emit(results)
 
 
 class ProfileStore:
@@ -3209,7 +3316,8 @@ class ProfileStore:
                 rules TEXT NOT NULL, opening TEXT NOT NULL, pgn_path TEXT NOT NULL,
                 reviewed INTEGER NOT NULL DEFAULT 0, user_accuracy REAL, chesscom_accuracy REAL, predicted_elo INTEGER,
                 review_json TEXT NOT NULL DEFAULT '[]', stats_json TEXT NOT NULL DEFAULT '{}',
-                opponent_country TEXT NOT NULL DEFAULT '', opponent_country_checked INTEGER NOT NULL DEFAULT 0)""")
+                opponent_country TEXT NOT NULL DEFAULT '', opponent_country_checked INTEGER NOT NULL DEFAULT 0,
+                castling_scanned INTEGER NOT NULL DEFAULT 0, castling_phase TEXT NOT NULL DEFAULT '', castling_ply INTEGER)""")
             imported_columns={row[1] for row in db.execute("PRAGMA table_info(chesscom_games)")}
             if "stats_json" not in imported_columns:
                 db.execute("ALTER TABLE chesscom_games ADD COLUMN stats_json TEXT NOT NULL DEFAULT '{}'")
@@ -3219,11 +3327,85 @@ class ProfileStore:
                 db.execute("ALTER TABLE chesscom_games ADD COLUMN opponent_country_checked INTEGER NOT NULL DEFAULT 0")
             if "chesscom_accuracy" not in imported_columns:
                 db.execute("ALTER TABLE chesscom_games ADD COLUMN chesscom_accuracy REAL")
+            if "castling_scanned" not in imported_columns:
+                db.execute("ALTER TABLE chesscom_games ADD COLUMN castling_scanned INTEGER NOT NULL DEFAULT 0")
+            if "castling_phase" not in imported_columns:
+                db.execute("ALTER TABLE chesscom_games ADD COLUMN castling_phase TEXT NOT NULL DEFAULT ''")
+            if "castling_ply" not in imported_columns:
+                db.execute("ALTER TABLE chesscom_games ADD COLUMN castling_ply INTEGER")
             db.commit()
         finally:db.close()
+        self._migrate_saved_accuracy_model()
 
     def connect(self):
         return sqlite3.connect(self.path,timeout=10)
+
+    @staticmethod
+    def _recalibrate_saved_accuracy(user_color,user_accuracy,white_accuracy,black_accuracy,
+                                    stats_source,review_source):
+        try:stats=json.loads(stats_source or "{}")
+        except (TypeError,ValueError):stats={}
+        try:review=json.loads(review_source) if review_source else None
+        except (TypeError,ValueError):review=None
+        moves=review.get("moves") if isinstance(review,dict) else None
+        if isinstance(moves,list):
+            by_side={"White":[],"Black":[]};by_phase={}
+            valid_moves=0
+            for move in moves:
+                if not isinstance(move,dict):continue
+                try:
+                    raw=raw_move_accuracy(int(move.get("loss",0)),move.get("expected_loss"))
+                    move["accuracy"]=calibrate_accuracy(raw);valid_moves+=1
+                except (TypeError,ValueError):continue
+                side=move.get("side")
+                if side in by_side:by_side[side].append(raw)
+                phase=move.get("phase")
+                if side==user_color and phase in ("Opening","Middlegame","Endgame"):
+                    by_phase.setdefault(phase,[]).append(raw)
+            if valid_moves:
+                aggregate=lambda values:calibrate_accuracy(sum(values)/len(values)) if values else None
+                white_accuracy=aggregate(by_side["White"]) if by_side["White"] else white_accuracy
+                black_accuracy=aggregate(by_side["Black"]) if by_side["Black"] else black_accuracy
+                recalibrated_user_accuracy=aggregate(by_side.get(user_color,[]))
+                if recalibrated_user_accuracy is not None:user_accuracy=recalibrated_user_accuracy
+                if isinstance(stats,dict):
+                    stats["phase_accuracy"]={phase:aggregate(values) for phase,values in by_phase.items()}
+                return (user_accuracy,white_accuracy,black_accuracy,
+                        json.dumps(stats,separators=(",",":")),
+                        json.dumps(review,separators=(",",":")))
+        def recalibrate(value):
+            try:return calibrate_accuracy(float(value)) if value is not None else None
+            except (TypeError,ValueError):return value
+        if isinstance(stats,dict) and isinstance(stats.get("phase_accuracy"),dict):
+            stats["phase_accuracy"]={phase:recalibrate(value)
+                                     for phase,value in stats["phase_accuracy"].items()}
+        return (recalibrate(user_accuracy),recalibrate(white_accuracy),recalibrate(black_accuracy),
+                json.dumps(stats,separators=(",",":")) if isinstance(stats,dict) else stats_source,
+                review_source)
+
+    def _migrate_saved_accuracy_model(self):
+        db=self.connect()
+        try:
+            saved=db.execute("SELECT value FROM settings WHERE key='accuracy_model_version'").fetchone()
+            if saved and saved[0]==ACCURACY_MODEL_VERSION:return
+            local_rows=db.execute("SELECT game_key,user_color,user_accuracy,white_accuracy,black_accuracy,stats_json,review_json FROM games").fetchall()
+            local_updates=[]
+            for key,user_color,user_accuracy,white_accuracy,black_accuracy,stats_source,review_source in local_rows:
+                values=self._recalibrate_saved_accuracy(user_color,user_accuracy,white_accuracy,black_accuracy,
+                                                         stats_source,review_source)
+                local_updates.append((*values,key))
+            db.executemany("UPDATE games SET user_accuracy=?,white_accuracy=?,black_accuracy=?,stats_json=?,review_json=? WHERE game_key=?",local_updates)
+            chesscom_rows=db.execute("SELECT game_id,user_color,user_accuracy,stats_json,review_json FROM chesscom_games").fetchall()
+            chesscom_updates=[]
+            for game_id,user_color,user_accuracy,stats_source,review_source in chesscom_rows:
+                user_accuracy,_,_,stats_source,review_source=self._recalibrate_saved_accuracy(
+                    user_color,user_accuracy,None,None,stats_source,review_source)
+                chesscom_updates.append((user_accuracy,stats_source,review_source,game_id))
+            db.executemany("UPDATE chesscom_games SET user_accuracy=?,stats_json=?,review_json=? WHERE game_id=?",chesscom_updates)
+            db.execute("INSERT OR REPLACE INTO settings(key,value) VALUES('accuracy_model_version',?)",
+                       (ACCURACY_MODEL_VERSION,))
+            db.commit()
+        finally:db.close()
 
     def chesscom_root(self,username):
         safe=normalize_chesscom_username(username)
@@ -3238,9 +3420,8 @@ class ProfileStore:
         if str(white.get("username","")).casefold()==username.casefold():user_color="White";player=white;opponent_data=black
         elif str(black.get("username","")).casefold()==username.casefold():user_color="Black";player=black;opponent_data=white
         else:raise ValueError("This game does not list the selected account as a player.")
-        game_url=str(game.get("url","")).strip()
-        game_id=game_url or str(game.get("uuid","")).strip()
-        if not game_id:game_id=hashlib.sha256(game["pgn"].encode("utf-8")).hexdigest()
+        game_id=chesscom_game_identifier(game)
+        if not game_id:raise ValueError("The selected archive entry has no game ID.")
         stable_id=hashlib.sha256(game_id.encode("utf-8")).hexdigest()[:16]
         end_time=game.get("end_time")
         try:played_at=datetime.fromtimestamp(int(end_time),datetime.now().astimezone().tzinfo).isoformat(timespec="minutes")
@@ -3304,14 +3485,15 @@ class ProfileStore:
         try:
             rows=db.execute("""SELECT game_id,username,played_at,result,user_color,user_result,player_rating,opponent,
                 opponent_rating,time_control,time_class,rated,rules,opening,pgn_path,reviewed,user_accuracy,
-                predicted_elo,review_json,stats_json,opponent_country,opponent_country_checked,chesscom_accuracy
+                predicted_elo,review_json,stats_json,opponent_country,opponent_country_checked,chesscom_accuracy,
+                castling_scanned,castling_phase,castling_ply
                 FROM chesscom_games WHERE username=? COLLATE NOCASE ORDER BY played_at DESC,game_id""",
                 (username,)).fetchall()
         finally:db.close()
         columns=("game_id","username","played_at","result","user_color","user_result","player_rating","opponent",
                  "opponent_rating","time_control","time_class","rated","rules","opening","pgn_path","reviewed",
                  "user_accuracy","predicted_elo","review_json","stats_json","opponent_country","opponent_country_checked",
-                 "chesscom_accuracy")
+                 "chesscom_accuracy","castling_scanned","castling_phase","castling_ply")
         records=[dict(zip(columns,row)) for row in rows]
         for record in records:
             record["opening"]=chesscom_opening_label(record.get("opening",""))
@@ -3343,6 +3525,18 @@ class ProfileStore:
         try:
             db.execute("UPDATE chesscom_games SET reviewed=?,user_accuracy=?,predicted_elo=?,review_json=?,stats_json=? WHERE game_id=?",
                        (int(bool(reviewed)),user_accuracy,predicted_elo,review_json,stats_json,game_id));db.commit()
+        finally:db.close()
+
+    def set_chesscom_castling_scans(self,scans):
+        rows=[]
+        for game_id,phase,ply in scans:
+            if phase not in ("Opening","Middlegame","Endgame","Did not castle"):
+                raise ValueError("Invalid castling phase")
+            rows.append((phase,ply,game_id))
+        if not rows:return
+        db=self.connect()
+        try:
+            db.executemany("UPDATE chesscom_games SET castling_scanned=1,castling_phase=?,castling_ply=? WHERE game_id=?",rows);db.commit()
         finally:db.close()
 
     def full_pgns_enabled(self):
@@ -3431,6 +3625,31 @@ def prepare_chesscom_pgn(record):
     try:game.headers["Date"]=datetime.fromisoformat(record["played_at"]).strftime("%Y.%m.%d")
     except (ValueError,TypeError):pass
     return game.accept(chess.pgn.StringExporter(headers=True,variations=True,comments=True))+"\n"
+
+
+def chesscom_pgn_clock_positions(game):
+    """Return the recorded White and Black clocks at each mainline position."""
+    positions=[(None,None)];white_clock=black_clock=None;node=game
+    for _move in game.mainline_moves():
+        node=node.variation(0)
+        clock=node.clock()
+        if clock is not None:
+            if node.parent.board().turn==chess.WHITE:white_clock=clock
+            else:black_clock=clock
+        positions.append((white_clock,black_clock))
+    return positions
+
+
+def format_chesscom_clock(seconds):
+    if seconds is None:return "—:——"
+    try:seconds=max(0.0,float(seconds))
+    except (TypeError,ValueError):return "—:——"
+    whole=int(seconds);fraction=seconds-whole
+    if whole>=3600:
+        hours,remaining=divmod(whole,3600);minutes,secs=divmod(remaining,60)
+        return f"{hours}:{minutes:02d}:{secs:02d}{f'.{int(fraction*10)}' if fraction>=.05 else ''}"
+    minutes,secs=divmod(whole,60)
+    return f"{minutes}:{secs:02d}{f'.{int(fraction*10)}' if fraction>=.05 else ''}"
 
 
 class AccuracyChart(QWidget):
@@ -4045,20 +4264,44 @@ class PuzzleDialog(QDialog):
 
 class ReviewProgressDialog(QDialog):
     cancel_requested=pyqtSignal()
-    def __init__(self,parent=None):
-        super().__init__(parent);self.finished=False;self.setWindowTitle("Reviewing game");self.setModal(True);self.setWindowModality(Qt.WindowModality.ApplicationModal);self.setFixedWidth(380)
+    def __init__(self,parent=None,batch_total=0,batch_started_at=None):
+        super().__init__(parent);self.finished=False;self.batch_total=max(0,int(batch_total));self.batch_started_at=batch_started_at or time.monotonic();self.setWindowTitle("Reviewing downloaded games" if self.batch_total else "Reviewing game");self.setModal(True);self.setWindowModality(Qt.WindowModality.ApplicationModal);self.setFixedWidth(380)
         self.started_at=time.monotonic()
         self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint,False)
         layout=QVBoxLayout(self);title=QLabel("Analysing both sides, one move at a time…");title.setObjectName("PlayerName");layout.addWidget(title)
         self.status=QLabel("Preparing Stockfish review");self.status.setObjectName("Muted");layout.addWidget(self.status)
         self.progress=QProgressBar();self.progress.setRange(0,100);self.progress.setValue(0);layout.addWidget(self.progress)
+        self.batch_status=None;self.batch_progress=None
+        if self.batch_total:
+            self.batch_status=QLabel("Preparing batch estimate…");self.batch_status.setObjectName("Muted");self.batch_status.setWordWrap(True);layout.addWidget(self.batch_status)
+            self.batch_progress=QProgressBar();self.batch_progress.setRange(0,self.batch_total*100);self.batch_progress.setValue(0);layout.addWidget(self.batch_progress)
         note=QLabel("Analysis runs locally. You can stop early and keep the moves already reviewed.");note.setObjectName("Muted");note.setWordWrap(True);layout.addWidget(note)
         self.cancel_button=QPushButton("Cancel review");self.cancel_button.clicked.connect(self.request_cancel);layout.addWidget(self.cancel_button)
+    def begin_game(self):
+        self.started_at=time.monotonic();self.status.setText("Preparing Stockfish review");self.progress.setRange(0,100);self.progress.setValue(0)
     def update_progress(self,done,total):
         elapsed=max(.01,time.monotonic()-self.started_at)
         remaining=max(0,int((elapsed/max(1,done))*(total-done)))
         estimate=f" · about {remaining}s left" if done else ""
         self.status.setText(f"Analysing move {done} of {total}{estimate}…");self.progress.setRange(0,max(1,total));self.progress.setValue(done)
+    def update_batch_progress(self,completed_games,move_done=0,move_total=0):
+        if not self.batch_total or not self.batch_progress or not self.batch_status:return
+        fraction=min(float(self.batch_total),max(0.0,float(completed_games)))
+        if move_total:fraction=min(float(self.batch_total),fraction+max(0,min(1,move_done/max(1,move_total))))
+        self.batch_progress.setValue(round(fraction*100))
+        elapsed=max(.01,time.monotonic()-self.batch_started_at)
+        remaining=max(0,round((elapsed/max(fraction,.01))*(self.batch_total-fraction)))
+        eta=(f"about {remaining//60}m {remaining%60}s remaining" if remaining>=60
+             else f"about {remaining}s remaining")
+        finished_games=int(fraction)
+        if fraction>=self.batch_total:
+            progress_text=f"{self.batch_total} of {self.batch_total} games complete"
+        elif fraction>finished_games:
+            current_percent=round((fraction-finished_games)*100)
+            progress_text=f"Game {finished_games+1} of {self.batch_total} · {current_percent}% complete"
+        else:
+            progress_text=f"{finished_games} of {self.batch_total} games complete"
+        self.batch_status.setText(f"{progress_text} · {eta}")
     def closeEvent(self,event):
         if not self.finished:event.ignore()
         else:event.accept()
@@ -4091,7 +4334,7 @@ class ReviewSummaryDialog(QDialog):
         cards=QHBoxLayout()
         def side_card(side):
             moves=[item for item in items if item.side==side]
-            accuracy=sum(item.accuracy for item in moves)/len(moves) if moves else None
+            accuracy=review_accuracy(moves)
             errors=sum(item.verdict in ("Inaccuracy","Mistake","Blunder") for item in moves)
             missed=sum(item.verdict=="Miss" for item in moves)
             frame=QFrame();frame.setObjectName("MetricCard");column=QVBoxLayout(frame);column.setContentsMargins(16,12,16,12)
@@ -4103,7 +4346,7 @@ class ReviewSummaryDialog(QDialog):
             return frame
         opponent_side="Black" if user_side=="White" else "White"
         cards.addWidget(side_card(user_side));cards.addWidget(side_card(opponent_side));layout.addLayout(cards)
-        quality_note=QLabel("Move quality averages expected score retained on each move using Stockfish. It is not a player rating.")
+        quality_note=QLabel("Local move quality is a CAPS2-inspired grade from Stockfish evaluation changes, not a literal expected-score percentage or player rating.")
         quality_note.setObjectName("Muted");quality_note.setWordWrap(True);layout.addWidget(quality_note)
         table=QTableWidget(2,13);table.setHorizontalHeaderLabels(["Side","Move quality","Brilliant","Great","Best","Excellent","Good","Miss","Inaccuracies","Mistakes","Blunders","Book","Forced"])
         table.setToolTip(MOVE_QUALITY_TOOLTIP)
@@ -4111,7 +4354,7 @@ class ReviewSummaryDialog(QDialog):
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents);table.horizontalHeader().setStretchLastSection(True)
         for row,side in enumerate(("White","Black")):
             moves=[item for item in items if item.side==side]
-            accuracy=sum(item.accuracy for item in moves)/len(moves) if moves else None
+            accuracy=review_accuracy(moves)
             counts={tag:sum(1 for item in moves if item.verdict==tag) for tag in ("Brilliant","Great","Best","Excellent","Good","Miss","Inaccuracy","Mistake","Blunder","Forced")}
             book=sum(1 for item in moves if item.book_status.startswith("Book move"))
             cells=[side,f"{accuracy:.1f}%" if accuracy is not None else "—",str(counts["Brilliant"]),str(counts["Great"]),str(counts["Best"]),str(counts["Excellent"]),str(counts["Good"]),str(counts["Miss"]),str(counts["Inaccuracy"]),str(counts["Mistake"]),str(counts["Blunder"]),str(book),str(counts["Forced"])]
@@ -4240,6 +4483,7 @@ class ProfileDialog(QDialog):
         account_row.addWidget(self.chesscom_username,1);self.chesscom_connect=QPushButton("Find archives");self.chesscom_connect.clicked.connect(self.find_chesscom_archives);account_row.addWidget(self.chesscom_connect)
         account_row.addWidget(QLabel("Month"));self.chesscom_month=QComboBox();self.chesscom_month.setMinimumWidth(140);self.chesscom_month.currentIndexChanged.connect(self.load_chesscom_month);account_row.addWidget(self.chesscom_month)
         self.chesscom_download_all=QPushButton("Download all months");self.chesscom_download_all.clicked.connect(self.download_all_chesscom);account_row.addWidget(self.chesscom_download_all)
+        self.chesscom_update_downloads=QPushButton("Update downloaded games");self.chesscom_update_downloads.setEnabled(False);self.chesscom_update_downloads.setToolTip("Check archive months from your latest saved game and download only games not already stored.");self.chesscom_update_downloads.clicked.connect(self.update_downloaded_chesscom);account_row.addWidget(self.chesscom_update_downloads)
         layout.addLayout(account_row)
         self.chesscom_status=QLabel("Enter your Chess.com username to find available monthly archives.");self.chesscom_status.setObjectName("Muted");self.chesscom_status.setWordWrap(True);layout.addWidget(self.chesscom_status)
         self.chesscom_progress=QProgressBar();self.chesscom_progress.setTextVisible(True);self.chesscom_progress.setVisible(False);layout.addWidget(self.chesscom_progress)
@@ -4307,9 +4551,13 @@ class ProfileDialog(QDialog):
         piece_accuracy_title=QLabel("ACCURACY BY PIECE");piece_accuracy_title.setObjectName("SectionTitle");layout.addWidget(piece_accuracy_title)
         self.chesscom_piece_accuracy=QTableWidget(0,3);self.chesscom_piece_accuracy.setHorizontalHeaderLabels(["Piece","Reviewed moves","Average accuracy"])
         self._configure_chesscom_table(self.chesscom_piece_accuracy);self.chesscom_piece_accuracy.setMaximumHeight(190);layout.addWidget(self.chesscom_piece_accuracy)
-        castling_title=QLabel("CASTLING TIMING AND RESULTS");castling_title.setObjectName("SectionTitle");layout.addWidget(castling_title)
+        castling_header=QHBoxLayout();castling_title=QLabel("CASTLING TIMING AND RESULTS · CLICK A ROW TO FILTER GAMES");castling_title.setObjectName("SectionTitle");castling_header.addWidget(castling_title,1)
+        self.chesscom_castling_scan=QPushButton("Quick scan");self.chesscom_castling_scan.setEnabled(False);self.chesscom_castling_scan.setToolTip("Read saved Chess.com PGNs to find when castling happened. No engine review is run.");self.chesscom_castling_scan.clicked.connect(self.quick_scan_chesscom_castling);castling_header.addWidget(self.chesscom_castling_scan)
+        self.chesscom_castling_scan_status=QLabel("Scans are saved and reused across dashboard refreshes.");self.chesscom_castling_scan_status.setObjectName("Muted");castling_header.addWidget(self.chesscom_castling_scan_status);layout.addLayout(castling_header)
+        self.chesscom_castling_scan_progress=QProgressBar();self.chesscom_castling_scan_progress.setVisible(False);layout.addWidget(self.chesscom_castling_scan_progress)
         self.chesscom_castling=QTableWidget(0,4);self.chesscom_castling.setHorizontalHeaderLabels(["Castling","Games","W–D–L","Score"])
-        self._configure_chesscom_table(self.chesscom_castling);self.chesscom_castling.setMaximumHeight(190);layout.addWidget(self.chesscom_castling)
+        self._configure_chesscom_table(self.chesscom_castling);self.chesscom_castling.setMaximumHeight(190)
+        self.chesscom_castling.cellClicked.connect(self._filter_chesscom_library_by_castling);layout.addWidget(self.chesscom_castling)
         shape_header=QHBoxLayout();shape_title=QLabel("GAME FLOW PATTERNS");shape_title.setObjectName("SectionTitle");shape_header.addWidget(shape_title,1)
         shape_header.addWidget(QLabel("Trace"));self.chesscom_shape_pattern=QComboBox();self.chesscom_shape_pattern.setMinimumWidth(210)
         self.chesscom_shape_pattern.currentTextChanged.connect(self._set_chesscom_shape_pattern);shape_header.addWidget(self.chesscom_shape_pattern);layout.addLayout(shape_header)
@@ -4347,7 +4595,8 @@ class ProfileDialog(QDialog):
         library_title=QLabel("DOWNLOADED GAMES · SAVED AS INDIVIDUAL PGNS");library_title.setObjectName("SectionTitle");layout.addWidget(library_title)
         library_filters=QHBoxLayout();self.chesscom_search=QLineEdit();self.chesscom_search.setPlaceholderText("Find opponent or opening…");self.chesscom_search.setClearButtonEnabled(True);library_filters.addWidget(self.chesscom_search,1)
         self.chesscom_review_filter=QComboBox();self.chesscom_review_filter.addItems(["All downloaded","Not reviewed","Reviewed"]);library_filters.addWidget(self.chesscom_review_filter);layout.addLayout(library_filters)
-        self._chesscom_library_page=0;self._chesscom_library_matches=[]
+        self._chesscom_library_page=0;self._chesscom_library_matches=[];self._chesscom_library_unfiltered_matches=[]
+        self._chesscom_castling_filter=None;self._chesscom_castling_phase_by_id=None;self._chesscom_all_games=[]
         library_paging=QHBoxLayout();self.chesscom_library_page_label=QLabel("Downloaded games load here.");library_paging.addWidget(self.chesscom_library_page_label,1)
         self.chesscom_library_previous=QPushButton("Previous 100");self.chesscom_library_previous.clicked.connect(lambda:self._change_chesscom_library_page(-1));library_paging.addWidget(self.chesscom_library_previous)
         self.chesscom_library_next=QPushButton("Next 100");self.chesscom_library_next.clicked.connect(lambda:self._change_chesscom_library_page(1));library_paging.addWidget(self.chesscom_library_next)
@@ -4365,7 +4614,7 @@ class ProfileDialog(QDialog):
         self.chesscom_folder=QPushButton("Open PGN folder");self.chesscom_folder.clicked.connect(self.open_chesscom_folder);library_actions.addWidget(self.chesscom_folder)
         self.chesscom_delete=QPushButton("Remove selected");self.chesscom_delete.clicked.connect(self.delete_selected_chesscom);library_actions.addWidget(self.chesscom_delete);library_actions.addStretch();layout.addLayout(library_actions)
         scroll.setWidget(page);self.chesscom_scroll=scroll;self.tabs.addTab(scroll,"Chess.com")
-        self._chesscom_archives=[];self._chesscom_available_games=[];self._chesscom_worker=None;self._chesscom_download_errors=0;self._chesscom_review_cache={};self._chesscom_pgn_header_cache={};self._chesscom_opening_mastery_cache={};self._chesscom_book_positions_cache=(None,set());self._chesscom_opening_trend_data={}
+        self._chesscom_archives=[];self._chesscom_available_games=[];self._chesscom_worker=None;self._chesscom_known_game_ids=set();self._chesscom_latest_game_month="";self._castling_scan_worker=None;self._chesscom_castling_scan_records=[];self._chesscom_castling_scan_summary="";self._chesscom_download_errors=0;self._chesscom_review_cache={};self._chesscom_pgn_header_cache={};self._chesscom_opening_mastery_cache={};self._chesscom_book_positions_cache=(None,set());self._chesscom_opening_trend_data={}
         self._chesscom_data_loaded=False
 
     @staticmethod
@@ -4377,20 +4626,24 @@ class ProfileDialog(QDialog):
         table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         header=table.horizontalHeader();header.setStretchLastSection(False);header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
 
-    def _start_chesscom_worker(self,operation,archive_url="",opponents=None):
+    def _start_chesscom_worker(self,operation,archive_url="",opponents=None,
+                               known_game_ids=None,minimum_archive_month=""):
         try:username=normalize_chesscom_username(self.chesscom_username.text())
         except ValueError as exc:self.chesscom_status.setText(str(exc));return
         self.store.set_setting("chesscom_username",username)
         self.chesscom_username.setEnabled(False);self.chesscom_connect.setEnabled(False);self.chesscom_download_all.setEnabled(False)
+        self.chesscom_update_downloads.setEnabled(False)
         self.chesscom_month.setEnabled(False);self.chesscom_available.setEnabled(False)
         self.chesscom_download_selected.setEnabled(False);self.chesscom_download_month.setEnabled(False)
         self.chesscom_country_lookup.setEnabled(False)
-        worker=ChessComFetchWorker(operation,username,archive_url,opponents,QApplication.instance());self._chesscom_worker=worker
+        worker=ChessComFetchWorker(operation,username,archive_url,opponents,QApplication.instance(),
+                                   known_game_ids=known_game_ids,minimum_archive_month=minimum_archive_month);self._chesscom_worker=worker
         worker.archives_ready.connect(self._chesscom_archives_loaded);worker.month_ready.connect(self._chesscom_month_loaded)
         worker.month_downloaded.connect(self._chesscom_month_downloaded);worker.progress.connect(self._chesscom_all_progress)
         worker.country_ready.connect(self._chesscom_country_ready);worker.countries_progress.connect(self._chesscom_country_progress)
         worker.countries_finished.connect(self._chesscom_countries_finished)
-        worker.failed.connect(self._chesscom_fetch_failed);worker.all_finished.connect(self._chesscom_all_finished)
+        worker.failed.connect(self._chesscom_fetch_failed)
+        worker.all_finished.connect(self._chesscom_update_finished if operation=="update" else self._chesscom_all_finished)
         worker.finished.connect(self._chesscom_worker_finished);worker.finished.connect(worker.deleteLater);worker.start()
         if operation=="countries":self.chesscom_country_cancel.setVisible(True)
 
@@ -4440,13 +4693,13 @@ class ProfileDialog(QDialog):
                 for row in sorted({index.row() for index in self.chesscom_available.selectionModel().selectedRows()})
                 if self.chesscom_available.item(row,0)]
 
-    def _save_chesscom_games(self,games):
+    def _save_chesscom_games(self,games,refresh=True):
         username=normalize_chesscom_username(self.chesscom_username.text());saved=0;errors=[]
         for game in games:
             try:self.store.save_chesscom_game(username,game);saved+=1
             except Exception as exc:errors.append(str(exc))
         self._chesscom_download_errors+=len(errors)
-        self.refresh_chesscom_library(username)
+        if refresh:self.refresh_chesscom_library(username)
         text=f"Saved {saved} game{'s' if saved!=1 else ''} in {self.store.chesscom_root(username)}."
         if errors:text+=f" {len(errors)} entry/entries were skipped: {errors[0]}"
         self.chesscom_status.setText(text)
@@ -4468,24 +4721,51 @@ class ProfileDialog(QDialog):
         self.chesscom_status.setText("Downloading monthly archives one at a time…")
         self._start_chesscom_worker("all")
 
+    def update_downloaded_chesscom(self):
+        try:normalize_chesscom_username(self.chesscom_username.text())
+        except ValueError as exc:self.chesscom_status.setText(str(exc));return
+        if not self._chesscom_known_game_ids or not self._chesscom_latest_game_month:
+            self.chesscom_status.setText("Download all months once first, then use Update downloaded games for new games.");return
+        year,month=map(int,self._chesscom_latest_game_month.split("-"));month-=1
+        if month==0:year-=1;month=12
+        cutoff=f"{year:04d}-{month:02d}"
+        self._chesscom_download_errors=0
+        self.chesscom_progress.setRange(0,0);self.chesscom_progress.setVisible(True)
+        self.chesscom_status.setText(f"Checking archive months from {cutoff} for new games…")
+        self._start_chesscom_worker("update",known_game_ids=self._chesscom_known_game_ids,
+                                    minimum_archive_month=cutoff)
+
     def _chesscom_month_downloaded(self,archive,games):
-        try:self._save_chesscom_games(games)
+        try:self._save_chesscom_games(games,refresh=(self._chesscom_worker is None or self._chesscom_worker.operation!="update"))
         except Exception as exc:self.chesscom_status.setText(f"Could not save archive {archive}: {exc}")
 
     def _chesscom_all_progress(self,current,total):
         self.chesscom_progress.setRange(0,max(1,total));self.chesscom_progress.setValue(current)
-        self.chesscom_status.setText(f"Downloading archive month {current} of {total}…")
+        if self._chesscom_worker and self._chesscom_worker.operation=="update":
+            self.chesscom_status.setText(f"Checking archive month {current} of {total} for new games…")
+        else:self.chesscom_status.setText(f"Downloading archive month {current} of {total}…")
 
     def _chesscom_all_finished(self):
         text=(f"All archive months checked. {self._chesscom_download_errors} game(s) could not be saved."
               if self._chesscom_download_errors else "All available public games have been downloaded.")
         self.chesscom_status.setText(text);self.refresh_chesscom_library(self.chesscom_username.text())
 
+    def _chesscom_update_finished(self):
+        worker=self._chesscom_worker
+        added=worker.new_games_added if worker else 0
+        checked=worker.archives_checked if worker else 0
+        self.refresh_chesscom_library(self.chesscom_username.text())
+        text=(f"Update complete: found {added:,} new game(s) after checking {checked:,} archive month(s)."
+              if added else f"Update complete: no new games found in {checked:,} archive month(s).")
+        if self._chesscom_download_errors:text+=f" {self._chesscom_download_errors} game(s) could not be saved."
+        self.chesscom_status.setText(text)
+
     def _chesscom_fetch_failed(self,message):self.chesscom_status.setText(message)
 
     def _chesscom_worker_finished(self):
         if self.sender() is not self._chesscom_worker:return
         self._chesscom_worker=None;self.chesscom_username.setEnabled(True);self.chesscom_connect.setEnabled(True);self.chesscom_download_all.setEnabled(True)
+        self.chesscom_update_downloads.setEnabled(bool(self._chesscom_known_game_ids))
         self.chesscom_month.setEnabled(True);self.chesscom_available.setEnabled(True)
         self.chesscom_download_selected.setEnabled(True);self.chesscom_download_month.setEnabled(True);self.chesscom_country_lookup.setEnabled(True)
         self.chesscom_progress.setVisible(False)
@@ -4556,6 +4836,42 @@ class ProfileDialog(QDialog):
         self._chesscom_library_page=max(0,self._chesscom_library_page+int(offset))
         self._render_chesscom_library(self._chesscom_library_matches)
 
+    def _chesscom_castling_phases_for_games(self):
+        if self._chesscom_castling_phase_by_id is None:
+            phases={}
+            for game in self._chesscom_all_games:
+                game_id=game.get("game_id")
+                if not game_id:continue
+                if game.get("castling_scanned"):
+                    phases[game_id]=castling_timing_label(game.get("castling_phase"),game.get("castling_ply"))
+                    continue
+                if not game.get("reviewed"):continue
+                try:payload=json.loads(str(game.get("review_json") or "{}"))
+                except (TypeError,ValueError):continue
+                moves=payload.get("moves",[]) if isinstance(payload,dict) else []
+                if not isinstance(moves,list):continue
+                castle=next((move for move in moves if isinstance(move,dict)
+                             and str(move.get("san"," ")).startswith(("O-O","0-0"))),None)
+                if castle is None:phases[game_id]="Did not castle"
+                else:phases[game_id]=castling_timing_label(castle.get("phase"),castle.get("ply"))
+            self._chesscom_castling_phase_by_id=phases
+        return self._chesscom_castling_phase_by_id
+
+    def _filter_chesscom_library_by_castling(self,row,_column=0):
+        item=self.chesscom_castling.item(row,0)
+        phase=item.data(Qt.ItemDataRole.UserRole) if item else None
+        if not phase:return
+        self._chesscom_castling_filter=None if self._chesscom_castling_filter==phase else str(phase)
+        self._chesscom_library_page=0
+        if self._chesscom_castling_filter:
+            phases=self._chesscom_castling_phases_for_games()
+            matches=[game for game in self._chesscom_library_unfiltered_matches
+                     if phases.get(game.get("game_id"))==self._chesscom_castling_filter]
+        else:matches=self._chesscom_library_unfiltered_matches
+        self._chesscom_library_matches=matches
+        self._render_chesscom_library(matches)
+        self.chesscom_scroll.ensureWidgetVisible(self.chesscom_library)
+
     def _render_chesscom_library(self,library_matches):
         page_size=100;page_count=max(1,(len(library_matches)+page_size-1)//page_size)
         self._chesscom_library_page=min(self._chesscom_library_page,page_count-1)
@@ -4576,9 +4892,51 @@ class ProfileDialog(QDialog):
         self.chesscom_library.setUpdatesEnabled(True);self.chesscom_library.viewport().update()
         first=page_start+1 if library_matches else 0
         last=page_start+len(page_games)
-        self.chesscom_library_page_label.setText(f"Showing {first:,}–{last:,} of {len(library_matches):,} matching games · 100 per page")
+        label=f"Showing {first:,}–{last:,} of {len(library_matches):,} matching games · 100 per page"
+        if self._chesscom_castling_filter:
+            label+=f" · Castling: {self._chesscom_castling_filter} (click its row again to clear)"
+        self.chesscom_library_page_label.setText(label)
         self.chesscom_library_previous.setEnabled(self._chesscom_library_page>0)
         self.chesscom_library_next.setEnabled(self._chesscom_library_page+1<page_count)
+
+    def quick_scan_chesscom_castling(self):
+        if self._castling_scan_worker and self._castling_scan_worker.isRunning():return
+        records=list(self._chesscom_castling_scan_records)
+        if not records:return
+        self.chesscom_castling_scan.setEnabled(False)
+        self.chesscom_castling_scan_status.setText(f"Scanning castling timing in {len(records):,} PGNs…")
+        self.chesscom_castling_scan_progress.setRange(0,len(records));self.chesscom_castling_scan_progress.setValue(0)
+        self.chesscom_castling_scan_progress.setVisible(True)
+        worker=ChessComCastlingScanWorker(records,self);self._castling_scan_worker=worker
+        worker.progress.connect(self._chesscom_castling_scan_progress)
+        worker.scan_done.connect(self._chesscom_castling_scan_done)
+        worker.finished.connect(self._chesscom_castling_scan_worker_finished)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _chesscom_castling_scan_progress(self,done,total):
+        self.chesscom_castling_scan_progress.setRange(0,max(1,total))
+        self.chesscom_castling_scan_progress.setValue(done)
+
+    def _chesscom_castling_scan_done(self,results):
+        scans=[];errors=0
+        for game_id,phase,ply,error in results:
+            if error:
+                errors+=1;continue
+            scans.append((game_id,phase,ply))
+        try:self.store.set_chesscom_castling_scans(scans)
+        except (OSError,sqlite3.Error,ValueError):errors+=len(scans);scans=[]
+        scanned=len(scans)
+        self._chesscom_castling_scan_summary=(
+            f"Scanned {scanned:,} games without engine review"
+            +(f" · {errors:,} PGNs could not be read; run again to retry" if errors else " · results saved"))
+
+    def _chesscom_castling_scan_worker_finished(self):
+        if self.sender() is not self._castling_scan_worker:return
+        self._castling_scan_worker=None;self.chesscom_castling_scan_progress.setVisible(False)
+        self.refresh_chesscom_library(self.chesscom_username.text())
+        if self._chesscom_castling_scan_summary:
+            self.chesscom_castling_scan_status.setText(self._chesscom_castling_scan_summary)
 
     def refresh_chesscom_library(self,username):
         if not isinstance(username,str):username=self.chesscom_username.text()
@@ -4593,6 +4951,13 @@ class ProfileDialog(QDialog):
         self.chesscom_review_insights.setRowCount(0);self.chesscom_tactic_examples.setRowCount(0);self.chesscom_shape_chart.set_profiles({})
         self._chesscom_opening_trend_data={}
         available=list(games)
+        self._chesscom_all_games=available;self._chesscom_castling_phase_by_id=None
+        self._chesscom_known_game_ids={str(game.get("game_id")) for game in available if game.get("game_id")}
+        valid_months=[str(game.get("played_at",""))[:7] for game in available
+                      if re.fullmatch(r"\d{4}-\d{2}",str(game.get("played_at",""))[:7])]
+        self._chesscom_latest_game_month=max(valid_months,default="")
+        running=bool(self._chesscom_worker and self._chesscom_worker.isRunning())
+        self.chesscom_update_downloads.setEnabled(bool(self._chesscom_known_game_ids) and not running)
         speed_choice=self.chesscom_speed_filter.currentText()
         now=datetime.now().astimezone();period_choice=self.chesscom_date_filter.currentText()
         def in_selected_period(game):
@@ -4606,6 +4971,20 @@ class ProfileDialog(QDialog):
         selected_games=[game for game in available
                         if (speed_choice=="All time controls" or str(game.get("time_class","")).casefold()==speed_choice.casefold())
                         and in_selected_period(game)]
+        self._chesscom_castling_scan_records=[game for game in selected_games
+            if not game.get("castling_scanned") and game.get("rules") in ("chess","")
+            and game.get("pgn_path") and Path(game["pgn_path"]).is_file()]
+        scan_running=bool(self._castling_scan_worker and self._castling_scan_worker.isRunning())
+        self.chesscom_castling_scan.setEnabled(bool(self._chesscom_castling_scan_records) and not scan_running)
+        if scan_running:
+            self.chesscom_castling_scan_status.setText("Quick scan is reading downloaded PGNs…")
+        elif self._chesscom_castling_scan_records:
+            self.chesscom_castling_scan_status.setText(
+                f"{len(self._chesscom_castling_scan_records):,} games ready · no engine review needed")
+        elif any(game.get("castling_scanned") for game in selected_games):
+            self.chesscom_castling_scan_status.setText("Quick scan is up to date for these games.")
+        else:
+            self.chesscom_castling_scan_status.setText("Download standard-chess PGNs to scan castling timing.")
         previous_start=previous_end=None
         if period_choice in ("Last 7 days","Last 30 days","Last 90 days","Last 365 days"):
             duration=timedelta(days={"Last 7 days":7,"Last 30 days":30,"Last 90 days":90,"Last 365 days":365}[period_choice])
@@ -4656,6 +5035,11 @@ class ProfileDialog(QDialog):
             if review_choice=="Not reviewed" and game["reviewed"]:continue
             if review_choice=="Reviewed" and not game["reviewed"]:continue
             library_matches.append(game)
+        self._chesscom_library_unfiltered_matches=library_matches
+        if self._chesscom_castling_filter:
+            phases=self._chesscom_castling_phases_for_games()
+            library_matches=[game for game in library_matches
+                             if phases.get(game.get("game_id"))==self._chesscom_castling_filter]
         self._chesscom_library_matches=library_matches
         self._render_chesscom_library(library_matches)
         rated_games=[game for game in selected_games if game.get("rated") and game.get("player_rating")]
@@ -5049,12 +5433,20 @@ class ProfileDialog(QDialog):
             cells=(piece,f"{len(values):,}",f"{sum(values)/len(values):.1f}%")
             row=self.chesscom_piece_accuracy.rowCount();self.chesscom_piece_accuracy.insertRow(row)
             for column,text in enumerate(cells):self.chesscom_piece_accuracy.setItem(row,column,QTableWidgetItem(text))
+        castle_labels=("Opening · moves 1–2","Opening · move 3","Opening · move 4","Opening · move 5",
+                       "Opening · move 6","Opening · move 7+","Middlegame","Endgame","Did not castle",
+                       "Opening · move unknown")
         castle_results={name:{"games":0,"wins":0,"draws":0,"losses":0,"points":0.0,"scored":0}
-                        for name in ("Opening","Middlegame","Endgame","Did not castle")}
-        for game,_stats in reviewed_records:
-            moves=current_reviews_by_id.get(game.get("game_id"),[])
-            castle=next((move for move in moves if str(move.get("san"," ")).startswith(("O-O","0-0"))),None)
-            phase=castle.get("phase") if castle else "Did not castle"
+                        for name in castle_labels}
+        for game in selected_games:
+            game_id=game.get("game_id")
+            if game.get("castling_scanned"):
+                phase=castling_timing_label(game.get("castling_phase"),game.get("castling_ply"))
+            elif game_id in current_reviews_by_id:
+                moves=current_reviews_by_id[game_id]
+                castle=next((move for move in moves if str(move.get("san"," ")).startswith(("O-O","0-0"))),None)
+                phase=castling_timing_label(castle.get("phase"),castle.get("ply")) if castle else "Did not castle"
+            else:continue
             if phase not in castle_results:phase="Did not castle"
             data=castle_results[phase];data["games"]+=1;result=game.get("user_result")
             if result in (0,.5,1):
@@ -5066,6 +5458,8 @@ class ProfileDialog(QDialog):
             cells=(phase,str(data["games"]),f"{data['wins']}–{data['draws']}–{data['losses']}",score_text)
             row=self.chesscom_castling.rowCount();self.chesscom_castling.insertRow(row)
             for column,text in enumerate(cells):self.chesscom_castling.setItem(row,column,QTableWidgetItem(text))
+            self.chesscom_castling.item(row,0).setData(Qt.ItemDataRole.UserRole,phase)
+            self.chesscom_castling.item(row,0).setToolTip("Click to show only games in this castling category; click again to clear the filter.")
 
         shape_results={}
         for game,_stats in reviewed_records:
@@ -5399,6 +5793,8 @@ class ProfileDialog(QDialog):
 
     def closeEvent(self,event):
         if self._chesscom_worker and self._chesscom_worker.isRunning():self._chesscom_worker.cancel()
+        if self._castling_scan_worker and self._castling_scan_worker.isRunning():
+            self._castling_scan_worker.requestInterruption();self._castling_scan_worker.wait(2000)
         super().closeEvent(event)
 
 
@@ -5424,7 +5820,7 @@ class ChessWindow(QMainWindow):
         self.selected = None; self.last_move = None; self.best_move = None
         self.review_moves: list[ReviewMove] = []; self.reviewing = False; self.review_index = 0
         self.external_review_game_id=None;self.external_review_username=None
-        self.chesscom_review_queue=[];self.chesscom_batch_total=0;self.chesscom_batch_completed=0;self.chesscom_review_wait_attempts=0
+        self.chesscom_review_queue=[];self.chesscom_batch_total=0;self.chesscom_batch_completed=0;self.chesscom_batch_started_at=None;self.chesscom_review_wait_attempts=0
         self.review_show_best=False;self.review_show_reply=False;self.review_pv_active=False;self.review_pv_index=0;self.review_pv_kind="best"
         self.review_speech=None;self._last_spoken_ply=None
         self.review_busy = False; self.bot_busy = False; self.engine_ready = False; self.engine_startup_timed_out = False
@@ -5568,6 +5964,7 @@ class ChessWindow(QMainWindow):
         self.opponent=QFrame(); self.opponent.setObjectName("PlayerCard"); opp_row=QHBoxLayout(self.opponent);opp_row.setContentsMargins(20,14,20,14)
         self.opponent_avatar=QLabel("♟"); self.opponent_avatar.setObjectName("Avatar"); opp_row.addWidget(self.opponent_avatar)
         opp_info=QVBoxLayout(); self.opponent_name=QLabel("Stockfish 19"); self.opponent_name.setObjectName("PlayerName"); self.opponent_rating=QLabel("Opponent · 1320 Elo"); self.opponent_rating.setObjectName("Muted"); opp_info.addWidget(self.opponent_name); opp_info.addWidget(self.opponent_rating); opp_row.addLayout(opp_info); opp_row.addStretch()
+        self.opponent_clock=QLabel("—:——");self.opponent_clock.setObjectName("ChessComClock");self.opponent_clock.setToolTip("Recorded Chess.com clock at this move");self.opponent_clock.setVisible(False);opp_row.addWidget(self.opponent_clock)
         play_col.addWidget(self.opponent)
         board_row=QHBoxLayout(); board_row.setSpacing(8); play_col.addLayout(board_row,1)
         self.evalbar=EvalBar(); board_row.addWidget(self.evalbar)
@@ -5575,6 +5972,7 @@ class ChessWindow(QMainWindow):
         self.you=QFrame(); self.you.setObjectName("PlayerCard"); yourow=QHBoxLayout(self.you);yourow.setContentsMargins(20,14,20,14)
         av=QLabel("♙"); av.setObjectName("Avatar"); yourow.addWidget(av)
         youinfo=QVBoxLayout(); self.you_name=QLabel("You · White"); self.you_name.setObjectName("PlayerName"); self.turn_label=QLabel("Your turn"); self.turn_label.setObjectName("Muted"); youinfo.addWidget(self.you_name); youinfo.addWidget(self.turn_label); yourow.addLayout(youinfo); yourow.addStretch()
+        self.you_clock=QLabel("—:——");self.you_clock.setObjectName("ChessComClock");self.you_clock.setToolTip("Recorded Chess.com clock at this move");self.you_clock.setVisible(False);yourow.addWidget(self.you_clock)
         play_col.addWidget(self.you)
         splitter.addWidget(play_area)
 
@@ -5709,6 +6107,7 @@ class ChessWindow(QMainWindow):
         #CoachHero { background:#26352a; color:#eef6e9; border:1px solid #42694c; border-radius:12px; padding:17px; font-size:16px; font-weight:700; }
         #Avatar { color:#e5e8e9; background:#363b3e; border-radius:21px; font-size:22px; min-width:42px; min-height:42px; qproperty-alignment: AlignCenter; }
         #PlayerName { font-size:16px; font-weight:700; color:#eef0f1; }
+        #ChessComClock { color:#f3f5f4; background:#181b1d; border:1px solid #42494c; border-radius:8px; padding:8px 12px; font-size:20px; font-weight:800; font-family:Consolas,monospace; }
         #SectionTitle { color:#a3abb0; font-size:13px; font-weight:800; letter-spacing:1.4px; }
         #ReviewDetail { background:#1e2224; color:#d9dedf; border:1px solid #32383b; border-radius:10px; padding:14px; }
         #AccentText { color:#9ed3ac; font-weight:800; font-size:19px; }
@@ -5901,12 +6300,38 @@ class ChessWindow(QMainWindow):
     def _update_player_labels(self):
         yours="White" if self.player_color==chess.WHITE else "Black"
         theirs="Black" if self.player_color==chess.WHITE else "White"
-        self.you_name.setText(f"You · {yours}")
-        self.opponent_name.setText(f"Stockfish 19 · {theirs}")
-        value=self.elo_slider.value(); target=f"~{value} Elo · approximate" if value<MIN_ELO else f"{value} Elo"
-        self.opponent_rating.setText(f"Opponent · {theirs} · {target}")
+        if self.external_review_game_id and self.external_review_players:
+            self.you_name.setText(f"{self.external_review_players.get(yours,yours)} · {yours}")
+            self.opponent_name.setText(f"{self.external_review_players.get(theirs,theirs)} · {theirs}")
+            you_rating=self.external_review_ratings.get(yours);opponent_rating=self.external_review_ratings.get(theirs)
+            self.turn_label.setText(f"Chess.com · {you_rating} Elo" if you_rating else "Chess.com game")
+            self.opponent_rating.setText(f"Chess.com · {opponent_rating} Elo" if opponent_rating else "Chess.com game")
+        else:
+            self.you_name.setText(f"You · {yours}")
+            self.opponent_name.setText(f"Stockfish 19 · {theirs}")
+            value=self.elo_slider.value(); target=f"~{value} Elo · approximate" if value<MIN_ELO else f"{value} Elo"
+            self.opponent_rating.setText(f"Opponent · {theirs} · {target}")
+            self.turn_label.setText("Your turn")
+        self.you_clock.setVisible(bool(self.external_review_game_id));self.opponent_clock.setVisible(bool(self.external_review_game_id))
         self.board_widget.flipped=self.player_color==chess.BLACK
         self.board_widget.update()
+
+    def _update_chesscom_clocks(self):
+        if not self.external_review_game_id or not self.external_review_clocks:
+            if hasattr(self,"you_clock"):self.you_clock.setText("—:——");self.opponent_clock.setText("—:——")
+            return
+        if self.reviewing and self.review_pv_active:
+            position=None
+        else:
+            position=max(0,self.review_index-1 if self.reviewing and self.review_show_best else
+                         self.review_index if self.reviewing else len(self.history))
+        if position is None or position>=len(self.external_review_clocks):
+            white_clock=black_clock=None
+        else:white_clock,black_clock=self.external_review_clocks[position]
+        user_clock=white_clock if self.player_color==chess.WHITE else black_clock
+        opponent_clock=black_clock if self.player_color==chess.WHITE else white_clock
+        self.you_clock.setText(format_chesscom_clock(user_clock))
+        self.opponent_clock.setText(format_chesscom_clock(opponent_clock))
 
     def on_square(self,square):
         if self.reviewing or self.bot_busy or self._game_finished() or self.board.turn!=self.player_color: return
@@ -6012,6 +6437,7 @@ class ChessWindow(QMainWindow):
         if self.reviewing and not self.review_pv_active and 0<self.review_index<=len(self.review_moves):
             focus=review_focus_squares(self.review_moves[self.review_index-1].events)
         self.board_widget.set_position(shown,last,self.selected,best,sticker,sticker_color,focus)
+        self._update_chesscom_clocks()
         self.momentum_chart.set_values([item.eval_after for item in self.review_moves],
                                        self.review_index if self.reviewing else 0,self.review_moves)
         if self.reviewing:
@@ -6282,26 +6708,40 @@ class ChessWindow(QMainWindow):
                 if self.chesscom_review_wait_attempts<40:
                     self.statusBar().showMessage("Waiting for Stockfish before continuing the Chess.com batch…",5000)
                     QTimer.singleShot(250,self.start_review);return
-                self.chesscom_review_queue.clear();self.chesscom_batch_total=0;self.chesscom_batch_completed=0
+                self.chesscom_review_queue.clear();self.chesscom_batch_total=0;self.chesscom_batch_completed=0;self.chesscom_batch_started_at=None
+                self._finish_chesscom_batch_progress()
             message=("Stockfish is taking longer than expected to start. Check STOCKFISH_PATH and try again; the app will continue if the engine connects." if self.engine_startup_timed_out else "Stockfish is still starting. Try again in a moment.")
             QMessageBox.warning(self,"Review game",message); return
         self.chesscom_review_wait_attempts=0
         if self.review_busy:return
         self.set_mode("review");self.review_token+=1; token=self.review_token
-        budget=float(self.analysis_level.currentData())
-        self.active_review_level=self.analysis_level.currentText()
+        batch_review=bool(self.chesscom_batch_total)
+        budget=(CHESSCOM_BATCH_REVIEW_BUDGET if batch_review else float(self.analysis_level.currentData()))
+        self.active_review_level=("Fast batch" if batch_review else self.analysis_level.currentText())
         self.analysis_level.setEnabled(False)
         self.worker.review_cancel_event.clear()
         self.review_busy=True; self.review_moves=[];self._render_history(); self.progress.setRange(0,len(self.history)); self.progress.setValue(0)
         self._update_syzygy_button()
         self.review_summary.setText("Reviewing both sides…"); self.review_btn.setText("Reviewing…");self.coach_review_btn.setText("Reviewing…")
-        self.review_progress_dialog=ReviewProgressDialog(self);self.review_progress_dialog.setStyleSheet(self._stylesheet());self.review_progress_dialog.cancel_requested.connect(self.cancel_review);self.review_progress_dialog.show()
+        if self.chesscom_batch_total and self.review_progress_dialog:
+            self.review_progress_dialog.begin_game()
+        else:
+            self.review_progress_dialog=ReviewProgressDialog(
+                self,self.chesscom_batch_total,self.chesscom_batch_started_at)
+            self.review_progress_dialog.setStyleSheet(self._stylesheet())
+            self.review_progress_dialog.cancel_requested.connect(self.cancel_review)
+            self.review_progress_dialog.show()
         self.review_request.emit((token,self.game_start_board.copy(stack=False),list(self.history),self.book_path,budget))
 
     def cancel_review(self):
         if not self.review_busy:return
         self.worker.review_cancel_event.set()
         if self.review_progress_dialog:self.review_progress_dialog.status.setText("Stopping after the current position; completed analysis will be kept.")
+
+    def _finish_chesscom_batch_progress(self):
+        if self.review_progress_dialog:
+            self.review_progress_dialog.finish();self.review_progress_dialog=None
+        self.chesscom_batch_started_at=None
 
     def practice_mistakes(self,start_ply=None,include_all=False):
         if not self.review_moves:
@@ -6387,13 +6827,21 @@ class ChessWindow(QMainWindow):
         if token!=self.review_token:return
         self.review_moves.append(item); self.progress.setValue(done)
         self.export_review_btn.setEnabled(True)
-        if self.review_progress_dialog:self.review_progress_dialog.update_progress(done,total)
-        self._render_history(); self._refresh_review_summary(True); self._sync_board(); self.statusBar().showMessage(f"Reviewing position {done} of {total}…")
+        if self.review_progress_dialog:
+            self.review_progress_dialog.update_progress(done,total)
+            if self.chesscom_batch_total:
+                self.review_progress_dialog.update_batch_progress(
+                    self.chesscom_batch_completed,done,total)
+        if not self.chesscom_batch_total:
+            self._render_history(); self._refresh_review_summary(True); self._sync_board()
+        self.statusBar().showMessage(f"Reviewing position {done} of {total}…")
     def _review_done(self,token,items,cancelled):
         if token!=self.review_token:return
+        batch_review=bool(self.chesscom_batch_total)
         review_start_ply=getattr(self,"_chesscom_review_start_ply",None)
         self._chesscom_review_start_ply=None
-        if self.review_progress_dialog:self.review_progress_dialog.finish();self.review_progress_dialog=None
+        if self.review_progress_dialog and not batch_review:
+            self.review_progress_dialog.finish();self.review_progress_dialog=None
         self.review_busy=False; self.review_btn.setText("Review Game");self.coach_review_btn.setText("Review this game"); self.review_moves=list(items)
         self.analysis_level.setEnabled(True)
         self._update_syzygy_button()
@@ -6410,6 +6858,8 @@ class ChessWindow(QMainWindow):
         if self.chesscom_batch_total:
             if complete:
                 self.chesscom_batch_completed+=1
+                if self.review_progress_dialog:
+                    self.review_progress_dialog.update_batch_progress(self.chesscom_batch_completed)
                 if self.chesscom_review_queue:
                     self.statusBar().showMessage(
                         f"Reviewed {self.chesscom_batch_completed} of {self.chesscom_batch_total} Chess.com games…",10000)
@@ -6418,8 +6868,10 @@ class ChessWindow(QMainWindow):
                     self.statusBar().showMessage(
                         f"Batch review complete · {self.chesscom_batch_completed} Chess.com games reviewed.",12000)
                     self.chesscom_batch_total=0;self.chesscom_batch_completed=0
+                    self._finish_chesscom_batch_progress()
             else:
                 self.chesscom_review_queue.clear();self.chesscom_batch_total=0;self.chesscom_batch_completed=0
+                self._finish_chesscom_batch_progress()
                 self.statusBar().showMessage("Chess.com batch stopped. Completed game reviews were saved.",10000)
             return
         if complete:
@@ -6448,7 +6900,7 @@ class ChessWindow(QMainWindow):
             if not theirs:
                 rows.append(f"<b>{side}</b> — no moves analyzed")
                 continue
-            accuracy=sum(m.accuracy for m in theirs)/len(theirs)
+            accuracy=review_accuracy(theirs)
             avg_loss=sum(min(m.loss,1500) for m in theirs)/len(theirs)
             counts={name:sum(1 for m in theirs if m.verdict==name) for name in ("Brilliant","Great","Best","Excellent","Good","Miss","Inaccuracy","Mistake","Blunder","Book","Forced")}
             rows.append(f"<b>{side}</b> {accuracy:.0f}% · avg loss {avg_loss:.0f} cp · {counts['Best']} best · {counts['Excellent']} excellent · {counts['Good']} good · {counts['Miss']} missed chances · {counts['Inaccuracy']+counts['Mistake']+counts['Blunder']} errors · {counts['Brilliant']} brilliant · {counts['Great']} great · {counts['Book']} book · {counts['Forced']} forced")
@@ -6458,7 +6910,7 @@ class ChessWindow(QMainWindow):
         phase_scores=[]
         for phase in ("Opening","Middlegame","Endgame"):
             subset=[m for m in self.review_moves if m.phase==phase]
-            if subset:phase_scores.append(f"{phase} {sum(m.accuracy for m in subset)/len(subset):.0f}%")
+            if subset:phase_scores.append(f"{phase} {review_accuracy(subset):.0f}%")
         prefix="Partial · " if partial else ""
         rows.append(f"{prefix}Biggest game-impact swing: {worst.side} {worst.san} ({worst.verdict}, {worst.expected_loss*100:.1f} pp expected score lost) · " + " / ".join(phase_scores))
         self.review_summary.setText("<br>".join(rows))
@@ -6466,7 +6918,7 @@ class ChessWindow(QMainWindow):
         for side,card in (("White",self.review_metric_white),("Black",self.review_metric_black)):
             moves=sides[side]
             if moves:
-                accuracy=sum(m.accuracy for m in moves)/len(moves);errors=sum(m.verdict in ("Miss","Inaccuracy","Mistake","Blunder") for m in moves)
+                accuracy=review_accuracy(moves);errors=sum(m.verdict in ("Miss","Inaccuracy","Mistake","Blunder") for m in moves)
                 card.metric.setText(f"{accuracy:.0f}% · {errors} errors")
             else:card.metric.setText("—")
         self.review_metric_turning.metric.setText(f"{worst.san} · {worst.expected_loss*100:.1f} pp")
@@ -6515,7 +6967,7 @@ class ChessWindow(QMainWindow):
             side="White" if self.player_color==chess.WHITE else "Black"
             user_moves=[m for m in items if m.side==side]
             if self.external_review_game_id:
-                user_acc=sum(m.accuracy for m in user_moves)/len(user_moves) if user_moves else None
+                user_acc=review_accuracy(user_moves)
                 profile_stats=self._review_stats(user_moves)
                 performance=(predicted_performance_elo(
                     self.profile_store.chesscom_games(self.external_review_username))
@@ -6532,9 +6984,9 @@ class ChessWindow(QMainWindow):
             if self.rating_eligible and result in ("1-0","0-1","1/2-1/2"):
                 points=1.0 if result==("1-0" if self.player_color==chess.WHITE else "0-1") else .5 if result=="1/2-1/2" else 0.0
                 user_result=points
-            user_acc=sum(m.accuracy for m in user_moves)/len(user_moves) if user_moves else None
-            white_acc=sum(m.accuracy for m in white)/len(white) if white else None
-            black_acc=sum(m.accuracy for m in black)/len(black) if black else None
+            user_acc=review_accuracy(user_moves)
+            white_acc=review_accuracy(white)
+            black_acc=review_accuracy(black)
             losses=[min(m.loss,1500) for m in user_moves]
             key_material=self.game_start_board.fen()+"|"+" ".join(move.uci() for move in self.history)+f"|{side}|{self.elo_slider.value()}|{result}"
             record={"game_key":hashlib.sha256(key_material.encode("utf-8")).hexdigest(),
@@ -6587,7 +7039,7 @@ class ChessWindow(QMainWindow):
         phase_values={}
         for phase in ("Opening","Middlegame","Endgame"):
             phase_moves=[m for m in user_moves if m.phase==phase]
-            if phase_moves:phase_values[phase]=sum(m.accuracy for m in phase_moves)/len(phase_moves)
+            if phase_moves:phase_values[phase]=review_accuracy(phase_moves)
         category_counts={name:sum(1 for m in user_moves if m.verdict==name) for name in ("Brilliant","Great","Best","Excellent","Good","Miss","Inaccuracy","Mistake","Blunder","Book","Forced")}
         errors=[m for m in user_moves if m.verdict in ("Miss","Inaccuracy","Mistake","Blunder")]
         strength_labels={"fork":"Tactical forks found","skewer":"Skewers created",
@@ -6673,6 +7125,7 @@ class ChessWindow(QMainWindow):
             if isinstance(saved_game,dict) and "chesscom_batch" in saved_game:
                 self.chesscom_review_queue=list(saved_game["chesscom_batch"])
                 self.chesscom_batch_total=len(self.chesscom_review_queue);self.chesscom_batch_completed=0
+                self.chesscom_batch_started_at=time.monotonic()
                 self._open_next_chesscom_review();return
             chesscom_record=(saved_game.get("chesscom_game") if isinstance(saved_game,dict) else None)
             start_chesscom_review=bool(saved_game.get("start_review")) if isinstance(saved_game,dict) else False
@@ -6697,6 +7150,15 @@ class ChessWindow(QMainWindow):
             self.game_version+=1;self.game_start_board=start_board;self.history=moves;self.board=board;self.review_moves=[];self.reviewing=False;self.review_index=len(moves);self.last_move=moves[-1] if moves else None
             self.external_review_game_id=chesscom_record.get("game_id") if chesscom_record else None
             self.external_review_username=chesscom_record.get("username") if chesscom_record else None
+            self.external_review_players=({side:(game.headers.get(side," ")
+                                                  if game.headers.get(side," ").strip() not in ("","?") else side)
+                                           for side in ("White","Black")}
+                                          if chesscom_record else {})
+            self.external_review_ratings=({side:(game.headers.get(f"{side}Elo","")
+                                                  if str(game.headers.get(f"{side}Elo"," ")).isdigit() else "")
+                                           for side in ("White","Black")}
+                                          if chesscom_record else {})
+            self.external_review_clocks=chesscom_pgn_clock_positions(game) if chesscom_record else []
             self.rating_eligible=game.headers.get("OfflineChessPlayedLocally")=="1"
             self.player_color=chess.WHITE if game.headers.get("OfflineChessUserColor","White")=="White" else chess.BLACK
             self.side_choice.blockSignals(True);self.side_choice.setCurrentIndex(0 if self.player_color==chess.WHITE else 1);self.side_choice.blockSignals(False)
@@ -6729,11 +7191,12 @@ class ChessWindow(QMainWindow):
         except Exception as exc:
             if self.chesscom_batch_total:
                 self.chesscom_review_queue.clear();self.chesscom_batch_total=0;self.chesscom_batch_completed=0
+                self._finish_chesscom_batch_progress()
             QMessageBox.critical(self,"Could not open saved game",str(exc))
 
     def _open_next_chesscom_review(self):
         if not self.chesscom_review_queue:
-            self.chesscom_batch_total=0;self.chesscom_batch_completed=0;return
+            self.chesscom_batch_total=0;self.chesscom_batch_completed=0;self._finish_chesscom_batch_progress();return
         record=self.chesscom_review_queue.pop(0)
         self.chesscom_review_wait_attempts=0
         self.statusBar().showMessage(
@@ -6751,7 +7214,8 @@ class ChessWindow(QMainWindow):
         self._reset_review_surfaces("Review this game to refresh its analysis.");self._render_history(); self._sync_board(); self._after_move(); self._update_opening()
     def reset(self):
         self.review_token+=1; self.worker.review_cancel_event.set(); self.review_busy=False; self.review_btn.setText("Review Game");self.analysis_level.setEnabled(True);self._update_syzygy_button()
-        self.external_review_game_id=None;self.external_review_username=None;self.chesscom_review_queue.clear();self.chesscom_batch_total=0;self.chesscom_batch_completed=0
+        self.external_review_game_id=None;self.external_review_username=None;self.external_review_players={};self.external_review_ratings={};self.external_review_clocks=[]
+        self.chesscom_review_queue.clear();self.chesscom_batch_total=0;self.chesscom_batch_completed=0
         self.game_version+=1; self.game_start_board=chess.Board();self.board=self.game_start_board.copy(); self.history=[]; self.review_moves=[]; self.reviewing=False; self.review_index=0; self.last_move=None; self.best_move=None; self.selected=None; self.game_result_override=None; self.bot_busy=False; self.rating_eligible=True
         self.review_table.setRowCount(0); self.progress.setValue(0); self._reset_review_surfaces("Run a review to compare both sides and find the game’s turning points."); self.evalbar.set_eval(0)
         self.best_view_btn.setChecked(False)
@@ -6769,6 +7233,7 @@ class ChessWindow(QMainWindow):
                 board.push(move)
             self.review_token+=1; self.worker.review_cancel_event.set(); self.review_busy=False; self.review_btn.setText("Review Game");self.analysis_level.setEnabled(True);self._update_syzygy_button()
             self.external_review_game_id=None;self.external_review_username=None
+            self.external_review_players={};self.external_review_ratings={};self.external_review_clocks=[]
             self.game_version+=1; self.game_start_board=start_board;self.history=moves; self.board=board; self.review_moves=[]; self.reviewing=False; self.review_index=len(moves); self.last_move=moves[-1] if moves else None
             self.rating_eligible=game.headers.get("OfflineChessPlayedLocally")=="1"
             if game.headers.get("OfflineChessUserColor") in ("White","Black"):
