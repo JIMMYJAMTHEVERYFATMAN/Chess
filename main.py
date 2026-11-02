@@ -5480,12 +5480,21 @@ class ChessWindow(QMainWindow):
 
     def _offer_update(self,release):
         tag=release["tag_name"]
-        answer=QMessageBox.question(
-            self,"Chess update available",
-            f"Version {tag} is available. Download and install it now? The app will restart when the update is ready.",
-            QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes)
-        if answer!=QMessageBox.StandardButton.Yes:return
+        release_url=f"https://github.com/JIMMYJAMTHEVERYFATMAN/Chess/releases/tag/{urllib.parse.quote(tag,safe='')}"
+        prompt=QMessageBox(self)
+        prompt.setWindowTitle("Chess update available")
+        prompt.setTextFormat(Qt.TextFormat.RichText)
+        prompt.setText(
+            f"Version {tag} is available. Download and install it now? "
+            "The app will restart when the update is ready.<br><br>"
+            f'<a href="{release_url}">View what’s new in this version on GitHub</a>')
+        prompt.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        for label in prompt.findChildren(QLabel):
+            if "href=" in label.text():
+                label.setOpenExternalLinks(True)
+        prompt.setStandardButtons(QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No)
+        prompt.setDefaultButton(QMessageBox.StandardButton.Yes)
+        if prompt.exec()!=QMessageBox.StandardButton.Yes:return
         self.statusBar().showMessage(f"Downloading Chess {tag}…")
         self._update_download_worker=UpdateDownloadWorker(release,self)
         self._update_download_worker.progress.connect(self._update_download_progress)
