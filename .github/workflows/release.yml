@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -27,9 +28,16 @@ jobs:
           if ($source -notmatch '(?m)^APP_VERSION = "([0-9]+\.[0-9]+\.[0-9]+)"$') {
             throw "Could not read APP_VERSION from main.py"
           }
-          if ($env:GITHUB_REF_NAME -ne "v$($Matches[1])") {
-            throw "Tag $env:GITHUB_REF_NAME must match APP_VERSION v$($Matches[1])"
+          $version = $Matches[1]
+          if ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch") {
+            $releaseTag = "v$version"
+          } else {
+            $releaseTag = $env:GITHUB_REF_NAME
           }
+          if ($releaseTag -ne "v$version") {
+            throw "Release tag $releaseTag must match APP_VERSION v$version"
+          }
+          "RELEASE_TAG=$releaseTag" | Add-Content $env:GITHUB_ENV
 
       - name: Install build dependencies
         run: python -m pip install --upgrade pip PyInstaller==6.22.3 PyQt6 python-chess
@@ -68,7 +76,12 @@ jobs:
       - name: Publish release and application
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh release create $env:GITHUB_REF_NAME
-          dist/OfflineChess.exe dist/OfflineChess.exe.sha256
-          --title $env:GITHUB_REF_NAME --generate-notes
+        shell: pwsh
+        run: |
+          gh release view $env:RELEASE_TAG 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:RELEASE_TAG dist/OfflineChess.exe dist/OfflineChess.exe.sha256 --clobber
+          } else {
+            gh release create $env:RELEASE_TAG dist/OfflineChess.exe dist/OfflineChess.exe.sha256 `
+              --title $env:RELEASE_TAG --generate-notes
+          }
