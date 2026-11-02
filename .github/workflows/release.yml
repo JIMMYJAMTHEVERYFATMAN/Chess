@@ -1,7 +1,9 @@
-name: Build and publish Windows release
+name: Build and publish Windows and Chromebook Linux releases
 
 on:
   push:
+    branches:
+      - codex/chromebook-linux-release
     tags:
       - "v*"
   workflow_dispatch:
@@ -11,6 +13,10 @@ permissions:
 
 jobs:
   windows-release:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: linux-build
+    permissions:
+      contents: write
     runs-on: windows-latest
     steps:
       - name: Check out source
@@ -122,6 +128,13 @@ jobs:
           & $env:OFFLINE_CHESS_BUILD_PYTHON tools/collect_third_party_licenses.py (Join-Path $licenseDir 'python-packages')
           Compress-Archive -Path (Join-Path $licenseDir '*') -DestinationPath dist/OfflineChess-licenses.zip -Force
 
+      - name: Download Chromebook Linux packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: offline-chess-linux-*
+          path: dist/linux
+          merge-multiple: true
+
       - name: Publish release and application
         env:
           GH_TOKEN: ${{ github.token }}
@@ -135,6 +148,16 @@ jobs:
           2. Save the EXE in a folder your Windows account can write to, such as Downloads or a folder under your user profile.
           3. Optional: in PowerShell, run `Get-FileHash .\OfflineChess.exe -Algorithm SHA256` and compare the SHA256 value with the first value in the checksum file.
           4. Double-click `OfflineChess.exe` to start. Python, Stockfish, and the Lichess opening data are bundled; no separate installation is required.
+
+          ## Chromebook / Linux
+
+          1. On your Chromebook, enable **Linux development environment** in Settings → About ChromeOS → Developers.
+          2. Copy the matching Debian package into **Linux files**: use `OfflineChess-linux-amd64.deb` for x86_64 devices or `OfflineChess-linux-arm64.deb` for ARM64 devices.
+          3. Optional: verify the download in Terminal with `sha256sum -c OfflineChess-linux-amd64.deb.sha256` or the matching ARM64 checksum file.
+          4. Install it with `sudo apt install ./OfflineChess-linux-amd64.deb` or `sudo apt install ./OfflineChess-linux-arm64.deb`, matching the file you copied. The package installs its required Linux GUI libraries.
+          5. Launch **Offline Chess** from the Chromebook app launcher. The app, Stockfish, and the Lichess opening data are bundled.
+
+          ChromeOS Linux support must be enabled on the Chromebook. Managed devices may restrict it. The `OfflineChess-licenses.zip` and `Stockfish-sf_19-source.zip` assets below apply to both Windows and Linux packages.
 
           ## Licenses and source
 
@@ -150,11 +173,197 @@ jobs:
           4. Select downloaded games and choose **Review selected** or **Review all unreviewed** to run local Stockfish analysis. In **Castling timing and results**, **Quick scan** reads saved PGNs without a full review; select a castling row to filter the game list to matching games.
           5. In **Profile → Overview**, choose board and piece styles. Opening data and profile files are stored locally under `%LOCALAPPDATA%\OfflineChess`.
           '@ | Set-Content -LiteralPath $notesPath -Encoding utf8
+          $assets = @(
+            "dist/OfflineChess.exe",
+            "dist/OfflineChess.exe.sha256",
+            "dist/OfflineChess-licenses.zip",
+            "dist/Stockfish-sf_19-source.zip",
+            "dist/nn-1a298aa575a0.nnue"
+          ) + @(Get-ChildItem -LiteralPath "dist/linux" -File | ForEach-Object { $_.FullName })
           gh release view $env:RELEASE_TAG 2>$null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $env:RELEASE_TAG dist/OfflineChess.exe dist/OfflineChess.exe.sha256 dist/OfflineChess-licenses.zip dist/Stockfish-sf_19-source.zip dist/nn-1a298aa575a0.nnue --clobber
+            gh release upload $env:RELEASE_TAG @assets --clobber
             gh release edit $env:RELEASE_TAG --notes-file $notesPath
           } else {
-            gh release create $env:RELEASE_TAG dist/OfflineChess.exe dist/OfflineChess.exe.sha256 dist/OfflineChess-licenses.zip dist/Stockfish-sf_19-source.zip dist/nn-1a298aa575a0.nnue `
+            gh release create $env:RELEASE_TAG @assets `
               --title $env:RELEASE_TAG --notes-file $notesPath
           }
+
+  linux-build:
+    name: Build Chromebook Linux package (${{ matrix.deb_arch }})
+    permissions:
+      contents: read
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            deb_arch: amd64
+            stockfish_arch: x86-64
+          - runner: ubuntu-22.04-arm
+            deb_arch: arm64
+            stockfish_arch: arm64
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check release version
+        shell: bash
+        run: |
+          version="$(sed -n 's/^APP_VERSION = "\([0-9.]*\)"$/\1/p' offline_chess/config.py | head -n1)"
+          if [[ -z "$version" ]]; then
+            echo "Could not read APP_VERSION from offline_chess/config.py" >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" || "$GITHUB_REF_TYPE" == "branch" ]]; then
+            release_tag="v$version"
+          else
+            release_tag="$GITHUB_REF_NAME"
+          fi
+          if [[ "$release_tag" != "v$version" ]]; then
+            echo "Release tag $release_tag must match APP_VERSION v$version" >&2
+            exit 1
+          fi
+          echo "RELEASE_TAG=$release_tag" >> "$GITHUB_ENV"
+          echo "APP_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Install system and build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            dpkg-dev xauth xvfb \
+            libdbus-1-3 libegl1 libfontconfig1 libfreetype6 libgl1 libglib2.0-0 \
+            libice6 libsm6 libxext6 libxi6 libxrandr2 libxrender1 libxfixes3 \
+            libx11-6 libx11-xcb1 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
+            libxcb-keysyms1 libxcb-randr0 libxcb-render0 libxcb-render-util0 libxcb-shape0 \
+            libxcb-shm0 libxcb-sync1 libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 \
+            libxcb-util1 libxcb1 libxkbcommon0 libxkbcommon-x11-0 zlib1g
+          build_venv="$RUNNER_TEMP/offline-chess-build-venv"
+          python -m venv "$build_venv"
+          "$build_venv/bin/python" -m pip install --upgrade pip
+          "$build_venv/bin/python" -m pip install \
+            PyInstaller==6.22.3 PyQt6==6.9.1 PyQt6-Qt6==6.9.1 \
+            python-chess==1.999 chess==1.11.2 "cryptography>=44.0.0,<48.0.0"
+          echo "OFFLINE_CHESS_BUILD_PYTHON=$build_venv/bin/python" >> "$GITHUB_ENV"
+
+      - name: Run test suite
+        run: '"$OFFLINE_CHESS_BUILD_PYTHON" -m unittest test_review_analysis test_telemetry -q'
+
+      - name: Configure public check-in collector URL
+        env:
+          CHECKIN_URL: ${{ vars.OFFLINE_CHESS_CHECKIN_URL }}
+        run: |
+          if [[ -z "$CHECKIN_URL" || "$CHECKIN_URL" != https://* ]]; then
+            echo "Set the repository Actions variable OFFLINE_CHESS_CHECKIN_URL to the deployed HTTPS collector URL before building a release." >&2
+            exit 1
+          fi
+          python - "$CHECKIN_URL" <<'PY'
+          import json, sys
+          from pathlib import Path
+          Path("offline_chess/build_config.py").write_text(
+              "# Generated by the release workflow. Do not commit a production collector URL here.\n"
+              f"USAGE_REPORT_URL = {json.dumps(sys.argv[1].rstrip('/'))}\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Download official universal Stockfish 19
+        run: |
+          archive="$RUNNER_TEMP/stockfish-linux-${{ matrix.stockfish_arch }}-universal.tar.gz"
+          curl --fail --location --retry 3 \
+            "https://github.com/official-stockfish/Stockfish/releases/download/sf_19/stockfish-linux-${{ matrix.stockfish_arch }}-universal.tar.gz" \
+            --output "$archive"
+          mkdir "$RUNNER_TEMP/stockfish"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/stockfish"
+          engine="$(find "$RUNNER_TEMP/stockfish" -type f -perm -u+x -print -quit)"
+          if [[ -z "$engine" ]]; then
+            echo "Could not find the executable in the official Stockfish archive." >&2
+            exit 1
+          fi
+          install -m 0755 "$engine" stockfish
+          uci_output="$(printf 'uci\nquit\n' | ./stockfish)"
+          if ! grep -Fq 'Stockfish 19' <<< "$uci_output"; then
+            echo "The downloaded engine did not identify as Stockfish 19." >&2
+            exit 1
+          fi
+
+      - name: Build and smoke-test Linux application
+        run: |
+          "$OFFLINE_CHESS_BUILD_PYTHON" -m PyInstaller --noconfirm --clean --onefile \
+            --name OfflineChess \
+            --add-binary "stockfish:." \
+            --add-data "openings:openings" \
+            main.py
+          set +e
+          timeout 20s xvfb-run -a ./dist/OfflineChess
+          app_status=$?
+          set -e
+          if [[ "$app_status" -ne 124 ]]; then
+            echo "The packaged application did not remain open in the Linux GUI smoke test (exit $app_status)." >&2
+            exit 1
+          fi
+
+      - name: Package Debian installer and checksum
+        run: |
+          package_root="$RUNNER_TEMP/offline-chess-deb"
+          mkdir -p "$package_root/DEBIAN" \
+            "$package_root/usr/bin" \
+            "$package_root/usr/share/applications" \
+            "$package_root/usr/share/doc/offline-chess"
+          install -m 0755 dist/OfflineChess "$package_root/usr/bin/offline-chess"
+          install -m 0644 LICENSE "$package_root/usr/share/doc/offline-chess/copyright"
+          install -m 0644 THIRD_PARTY_NOTICES.md "$package_root/usr/share/doc/offline-chess/THIRD_PARTY_NOTICES.md"
+          cat > "$package_root/usr/share/applications/offline-chess.desktop" <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=Offline Chess
+          Comment=Play and review chess games locally
+          Exec=offline-chess
+          Terminal=false
+          Categories=Game;BoardGame;
+          EOF
+          cat > "$package_root/DEBIAN/control" <<EOF
+          Package: offline-chess
+          Version: $APP_VERSION
+          Section: games
+          Priority: optional
+          Architecture: ${{ matrix.deb_arch }}
+          Maintainer: Offline Chess contributors <noreply@github.com>
+          Depends: libc6 (>= 2.35), libdbus-1-3, libegl1, libfontconfig1, libfreetype6, libgl1, libglib2.0-0, libice6, libsm6, libstdc++6, libx11-6, libx11-xcb1, libxcb-cursor0, libxcb-icccm4, libxcb-image0, libxcb-keysyms1, libxcb-randr0, libxcb-render0, libxcb-render-util0, libxcb-shape0, libxcb-shm0, libxcb-sync1, libxcb-util1, libxcb-xfixes0, libxcb-xinerama0, libxcb-xkb1, libxcb1, libxext6, libxfixes3, libxi6, libxkbcommon0, libxkbcommon-x11-0, libxrandr2, libxrender1, zlib1g
+          Description: Offline Chess desktop app for Chromebook Linux
+           Play chess and review games with a bundled Stockfish engine.
+           Includes Lichess opening names and runs in the Debian Linux
+           development environment on supported Chromebooks.
+          EOF
+          deb="dist/OfflineChess-linux-${{ matrix.deb_arch }}.deb"
+          dpkg-deb --build --root-owner-group "$package_root" "$deb"
+          dpkg-deb --info "$deb"
+          (cd dist && sha256sum "OfflineChess-linux-${{ matrix.deb_arch }}.deb" > "OfflineChess-linux-${{ matrix.deb_arch }}.deb.sha256")
+
+      - name: Install and smoke-test Debian package
+        run: |
+          sudo apt-get install -y "./dist/OfflineChess-linux-${{ matrix.deb_arch }}.deb"
+          set +e
+          timeout 20s xvfb-run -a /usr/bin/offline-chess
+          app_status=$?
+          set -e
+          if [[ "$app_status" -ne 124 ]]; then
+            echo "The installed Debian package did not remain open in the GUI smoke test (exit $app_status)." >&2
+            exit 1
+          fi
+
+      - name: Save Linux package for release
+        uses: actions/upload-artifact@v4
+        with:
+          name: offline-chess-linux-${{ matrix.deb_arch }}
+          path: |
+            dist/OfflineChess-linux-${{ matrix.deb_arch }}.deb
+            dist/OfflineChess-linux-${{ matrix.deb_arch }}.deb.sha256
+          if-no-files-found: error
+          retention-days: 1
