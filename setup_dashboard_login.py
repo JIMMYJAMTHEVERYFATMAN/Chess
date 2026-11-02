@@ -34,7 +34,7 @@ def main() -> int:
         print("Use at least 12 characters.", file=sys.stderr)
         return 2
     confirm = getpass.getpass("Confirm dashboard password: ")
-    if not secrets.compare_digest(password, confirm):
+    if not secrets.compare_digest(password.encode("utf-8"), confirm.encode("utf-8")):
         print("Passwords did not match.", file=sys.stderr)
         return 2
     salt = secrets.token_bytes(16)
