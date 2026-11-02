@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local chess engine binary
+/stockfish.exe
+/stockfish
+
+# Local game and profile data
+/test pgns/
+*.pgn
+chesscom_games/
+profiles/
+
+# Build and packaging output
+build/
+dist/
+*.spec
+
+# IDE and operating system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
