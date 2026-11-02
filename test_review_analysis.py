@@ -92,6 +92,17 @@ def play(board, san):
 
 @unittest.skipIf(TEST_IMPORT_ERROR is not None,f"App review dependencies unavailable: {TEST_IMPORT_ERROR}")
 class ReviewAnalysisTests(unittest.TestCase):
+    def setUp(self):
+        self._previous_xdg_data_home=os.environ.get("XDG_DATA_HOME")
+        self._test_data_directory=tempfile.TemporaryDirectory(dir=os.getcwd())
+        os.environ["XDG_DATA_HOME"]=self._test_data_directory.name
+        self.addCleanup(self._test_data_directory.cleanup)
+        self.addCleanup(self._restore_xdg_data_home)
+
+    def _restore_xdg_data_home(self):
+        if self._previous_xdg_data_home is None:os.environ.pop("XDG_DATA_HOME",None)
+        else:os.environ["XDG_DATA_HOME"]=self._previous_xdg_data_home
+
     def test_chess_board_renders_initial_position(self):
         app=QApplication.instance() or QApplication([])
         board=ChessBoard();board.resize(640,640)
