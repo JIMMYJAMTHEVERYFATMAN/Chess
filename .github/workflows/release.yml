@@ -56,8 +56,8 @@ jobs:
           }
           $engineDir = Join-Path $env:RUNNER_TEMP "stockfish"
           Expand-Archive -LiteralPath $archive -DestinationPath $engineDir -Force
-          $engine = Get-ChildItem -LiteralPath $engineDir -Filter stockfish.exe -Recurse | Select-Object -First 1
-          if (-not $engine) { throw "Could not find stockfish.exe in the official archive." }
+          $engine = Get-ChildItem -LiteralPath $engineDir -Filter stockfish-windows-x86-64-universal.exe -Recurse | Select-Object -First 1
+          if (-not $engine) { throw "Could not find the Stockfish 19 universal executable in the official archive." }
           Copy-Item -LiteralPath $engine.FullName -Destination stockfish.exe -Force
 
       - name: Build single-file application
