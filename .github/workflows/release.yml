@@ -25,10 +25,11 @@ jobs:
         shell: pwsh
         run: |
           $source = Get-Content main.py -Raw
-          if ($source -notmatch '(?m)^APP_VERSION = "([0-9]+\.[0-9]+\.[0-9]+)"$') {
+          $versionMatch = [regex]::Match($source, '(?m)^APP_VERSION = "([0-9]+\.[0-9]+\.[0-9]+)"\r?$')
+          if (-not $versionMatch.Success) {
             throw "Could not read APP_VERSION from main.py"
           }
-          $version = $Matches[1]
+          $version = $versionMatch.Groups[1].Value
           if ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch") {
             $releaseTag = "v$version"
           } else {
