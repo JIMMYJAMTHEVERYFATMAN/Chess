@@ -1,6 +1,7 @@
 """Chess board, evaluation bar, and opening explorer widgets."""
 from __future__ import annotations
 
+import math
 import time
 import sys
 

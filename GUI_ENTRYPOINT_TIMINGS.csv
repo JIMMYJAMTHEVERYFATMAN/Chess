@@ -1,0 +1,178 @@
+﻿group,entry_point,action,ui_response_ms,end_to_end_ms,status,details
+startup,Desktop window,construct + show + engine ready,52.9,1234.8,ok,engine_ready=True; engine status=Stockfish 19 · ready
+startup,Opening catalog,async catalog available,0.0,228.6,ok,entries=3865
+Game window,Chessboard,play e2-e4 and await Stockfish reply,22.7,487.3,ok,user move legal=True; plies after response=2
+Game window,tab: Game,select tab,0.0,,ok,
+Game window,play: Tablebases · Off,button click,0.1,,ok,objectName=
+Game window,play: Load Lichess DB,button click,0.0,,ok,objectName=
+Game window,play: Load weighted book,button click,0.0,,ok,objectName=
+Game window,play: Profile,button click,64.5,,ok,objectName=
+Game window,play: Report bug,button click,0.9,,ok,objectName=FeedbackButton
+Game window,play: Suggest feature,button click,0.5,,ok,objectName=FeedbackButton
+Game window,play: Exit fullscreen,button click,0.1,,ok,objectName=
+Game window,play: Play,button click,0.3,,ok,objectName=ModeButton
+Game window,play: Review,button click,1.4,,ok,objectName=ModeButton
+Game window,play: Coach,button click,0.6,,ok,objectName=ModeButton
+Game window,play: Review this game,button click,0.0,,ok,objectName=PrimaryButton
+Game window,play: Retry mistakes  missed chances,button click,0.0,,ok,objectName=Button
+Game window,play: Explore this opening,button click,4.4,,ok,objectName=Button
+Game window,play: Open puzzle studio,button click,0.3,,ok,objectName=Button
+Game window,review: Find puzzle in game,button click,3.4,,ok,objectName=Button
+Game window,review: Generate puzzle,button click,3.7,,ok,objectName=PrimaryButton
+Game window,review: Hint,button click,,,skipped,disabled in the current state
+Game window,review: Show solution,button click,,,skipped,disabled in the current state
+Game window,review: Back,button click,0.0,,ok,objectName=
+Game window,review: Reset line,button click,0.1,,ok,objectName=
+Game window,review: Play move,button click,0.0,,ok,objectName=PrimaryButton
+Game window,tab: Position Lab,select tab,0.8,,ok,
+Game window,Position Lab: ♛,button click,0.7,,ok,objectName=
+Game window,Position Lab: ♜,button click,0.6,,ok,objectName=
+Game window,Position Lab: ♝,button click,0.8,,ok,objectName=
+Game window,Position Lab: ♞,button click,2.9,,ok,objectName=
+Game window,Position Lab: ♟,button click,0.7,,ok,objectName=
+Game window,Position Lab: ♚,button click,0.6,,ok,objectName=
+Game window,Position Lab: ♕,button click,0.7,,ok,objectName=
+Game window,Position Lab: ♖,button click,0.9,,ok,objectName=
+Game window,Position Lab: ♗,button click,0.6,,ok,objectName=
+Game window,Position Lab: ♘,button click,0.6,,ok,objectName=
+Game window,Position Lab: ♙,button click,0.6,,ok,objectName=
+Game window,Position Lab: ♔,button click,0.6,,ok,objectName=
+Game window,Position Lab: Move,button click,0.8,,ok,objectName=Button
+Game window,Position Lab: Reset,button click,0.2,,ok,objectName=Button
+Game window,Position Lab: Clear,button click,0.2,,ok,objectName=Button
+Game window,Position Lab: Flip,button click,0.0,,ok,objectName=Button
+Game window,Position Lab: unnamed button,button click,0.1,,ok,objectName=
+Game window,Position Lab: Copy,button click,0.3,,ok,objectName=Button
+Game window,Position Lab: Load FEN,button click,0.2,,ok,objectName=Button
+Game window,Position Lab: White,button click,0.0,,ok,objectName=
+Game window,Position Lab: Black,button click,0.2,,ok,objectName=
+Game window,Position Lab: 2s,button click,0.0,,ok,objectName=
+Game window,Position Lab: 4s,button click,0.0,,ok,objectName=
+Game window,Position Lab: 8s,button click,0.0,,ok,objectName=
+Game window,Position Lab: Castling rights,button click,0.2,,ok,objectName=CastlingToggle
+Game window,Position Lab: White · O-O,button click,,,skipped,disabled in the current state
+Game window,Position Lab: White · O-O-O,button click,,,skipped,disabled in the current state
+Game window,Position Lab: Black · O-O,button click,,,skipped,disabled in the current state
+Game window,Position Lab: Black · O-O-O,button click,,,skipped,disabled in the current state
+Game window,Position Lab: ← Back,button click,,,skipped,disabled in the current state
+Game window,Position Lab: Forward →,button click,,,skipped,disabled in the current state
+Game window,Position Lab: Find the best move  →,button click,0.1,,ok,objectName=PrimaryButton
+Game window,tab: Puzzles,select tab,0.3,,ok,
+Game window,combo: Engine focus,select Engine focus,0.0,,ok,
+Game window,combo: Engine focus,select Total random,0.1,,ok,
+Game window,combo: Engine focus,select My Chess.com training,0.3,,ok,
+Game window,combo: Engine focus,select Checkmate in N,0.3,,ok,
+Game window,combo: Engine focus,select Challenge,0.4,,ok,
+Position Lab,Reset position,button click,0.1,,ok,
+Position Lab,Load valid FEN,set starting FEN,0.2,,ok,
+Position Lab,Load invalid FEN,reject malformed FEN,0.1,,ok,
+Position Lab,Clear position,button click,0.1,,ok,
+Position Lab,Reset position,restore start,0.2,,ok,
+Position Lab,Analyze position,request Stockfish analysis,0.1,6444.5,ok,analysis completion observed=True; both sides have candidates=True
+Profile,Profile dialog,construct,47.4,,ok,tabs=2
+Profile,tab: Overview,select tab,0.0,,ok,
+Profile,unnamed button,button click,0.0,,ok,profile tab=Overview; objectName=
+Profile,Find archives,button click,1.6,,ok,profile tab=Overview; objectName=
+Profile,Download all months,button click,0.0,,ok,profile tab=Overview; objectName=
+Profile,Lookup opponent countries,button click,0.0,,ok,profile tab=Overview; objectName=
+Profile,Stop lookups,button click,0.0,,ok,profile tab=Overview; objectName=
+Profile,Download selected games,button click,0.1,,ok,profile tab=Overview; objectName=
+Profile,Download this month,button click,0.0,,ok,profile tab=Overview; objectName=
+Profile,Open selected game,button click,0.1,,ok,profile tab=Overview; objectName=
+Profile,Review selected,button click,0.1,,ok,profile tab=Overview; objectName=
+Profile,Review all unreviewed,button click,0.1,,ok,profile tab=Overview; objectName=
+Profile,Open PGN folder,button click,0.0,,ok,profile tab=Overview; objectName=
+Profile,Remove selected,button click,0.4,,ok,profile tab=Overview; objectName=
+Profile,Show board coordinates,button click,0.1,,ok,profile tab=Overview; objectName=
+Profile,Animate move highlights,button click,0.1,,ok,profile tab=Overview; objectName=
+Profile,Keep full PGNs in profile (uses more space),button click,4.0,,ok,profile tab=Overview; objectName=
+Profile,Open saved game,button click,0.0,,ok,profile tab=Overview; objectName=
+Profile,Delete selected game,button click,0.0,,ok,profile tab=Overview; objectName=
+Profile,Delete stored PGNs,button click,0.1,,ok,profile tab=Overview; objectName=
+Profile,Delete all profile data,button click,0.0,,ok,profile tab=Overview; objectName=
+Profile,"Share app check-ins (install ID, version, last seen, Chess.com username)",button click,3.7,,ok,profile tab=Overview; objectName=
+Profile,Send feedback,button click,0.9,,ok,profile tab=Overview; objectName=
+Profile,combo: Classic Green,select Classic Green,0.0,,ok,
+Profile,combo: Classic Green,select Walnut,0.1,,ok,
+Profile,combo: Classic Green,select Ocean Blue,0.1,,ok,
+Profile,combo: Classic Green,select Soft Violet,0.1,,ok,
+Profile,combo: Classic Green,select Slate,0.1,,ok,
+Profile,combo: Classic Green,select Mint,0.1,,ok,
+Profile,combo: Classic Green,select Crimson,0.1,,ok,
+Profile,combo: Classic Green,select Graphite,0.1,,ok,
+Profile,combo: Classic Green,select Desert,0.1,,ok,
+Profile,combo: Classic Green,select Nordic,0.1,,ok,
+Profile,combo: Classic Green,select Rose,0.1,,ok,
+Profile,combo: Classic Green,select High Contrast,0.1,,ok,
+Profile,combo: Classic Green,select Monochrome,0.1,,ok,
+Profile,combo: Tournament,select Tournament,0.0,,ok,
+Profile,combo: Tournament,select Modern,0.1,,ok,
+Profile,combo: Tournament,select Letters,0.1,,ok,
+Profile,combo: Tournament,select Badge,0.1,,ok,
+Profile,combo: Tournament,select Bold,0.1,,ok,
+Profile,combo: All time,select All time,0.0,,ok,
+Profile,combo: All time,select Last 30 days,2.4,,ok,
+Profile,combo: All time,select Last 90 days,1.1,,ok,
+Profile,combo: All time,select This year,1.1,,ok,
+Profile,combo: All results,select All results,0.0,,ok,
+Profile,combo: All results,select Wins,1.0,,ok,
+Profile,combo: All results,select Draws,0.9,,ok,
+Profile,combo: All results,select Losses,0.9,,ok,
+Profile,combo: Both colors,select Both colors,0.0,,ok,
+Profile,combo: Both colors,select As White,1.1,,ok,
+Profile,combo: Both colors,select As Black,1.2,,ok,
+Profile,combo: All openings,select All openings,0.0,,ok,
+Profile,combo: Any opponent,select Any opponent,0.0,,ok,
+Profile,combo: Any opponent,select Below 1000,1.0,,ok,
+Profile,combo: Any opponent,select 1000–1599,1.1,,ok,
+Profile,combo: Any opponent,select 1600–2199,1.1,,ok,
+Profile,combo: Any opponent,select 2200+,0.9,,ok,
+Profile,tab: Chess.com,select tab,5.7,,ok,
+Profile,Show board coordinates,button click,0.0,,ok,profile tab=Chess.com; objectName=
+Profile,Animate move highlights,button click,0.0,,ok,profile tab=Chess.com; objectName=
+Profile,unnamed button,button click,0.0,,ok,profile tab=Chess.com; objectName=
+Profile,Keep full PGNs in profile (uses more space),button click,4.0,,ok,profile tab=Chess.com; objectName=
+Profile,Open saved game,button click,0.0,,ok,profile tab=Chess.com; objectName=
+Profile,Delete selected game,button click,0.0,,ok,profile tab=Chess.com; objectName=
+Profile,Delete stored PGNs,button click,0.0,,ok,profile tab=Chess.com; objectName=
+Profile,Delete all profile data,button click,0.0,,ok,profile tab=Chess.com; objectName=
+Profile,"Share app check-ins (install ID, version, last seen, Chess.com username)",button click,5.1,,ok,profile tab=Chess.com; objectName=
+Profile,Send feedback,button click,1.0,,ok,profile tab=Chess.com; objectName=
+Profile,Find archives,button click,0.3,,ok,profile tab=Chess.com; objectName=
+Profile,Download all months,button click,0.0,,ok,profile tab=Chess.com; objectName=
+Profile,Lookup opponent countries,button click,0.0,,ok,profile tab=Chess.com; objectName=
+Profile,Stop lookups,button click,0.0,,ok,profile tab=Chess.com; objectName=
+Profile,Download selected games,button click,0.1,,ok,profile tab=Chess.com; objectName=
+Profile,Download this month,button click,0.0,,ok,profile tab=Chess.com; objectName=
+Profile,Open selected game,button click,0.1,,ok,profile tab=Chess.com; objectName=
+Profile,Review selected,button click,0.1,,ok,profile tab=Chess.com; objectName=
+Profile,Review all unreviewed,button click,0.1,,ok,profile tab=Chess.com; objectName=
+Profile,Open PGN folder,button click,0.1,,ok,profile tab=Chess.com; objectName=
+Profile,Remove selected,button click,0.3,,ok,profile tab=Chess.com; objectName=
+Profile,Cancel,button click,0.0,,ok,profile tab=Chess.com; objectName=
+Profile,combo: All time,select All time,0.0,,ok,
+Profile,combo: All time,select Last 7 days,0.3,,ok,
+Profile,combo: All time,select Last 30 days,0.3,,ok,
+Profile,combo: All time,select Last 90 days,0.3,,ok,
+Profile,combo: All time,select Last 365 days,0.3,,ok,
+Profile,combo: All time,select This year,0.2,,ok,
+Profile,combo: All time controls,select All time controls,0.0,,ok,
+Profile,combo: All time controls,select Bullet,0.3,,ok,
+Profile,combo: All time controls,select Blitz,0.3,,ok,
+Profile,combo: All time controls,select Rapid,0.3,,ok,
+Profile,combo: All time controls,select Daily,0.3,,ok,
+Profile,combo: All downloaded,select All downloaded,0.0,,ok,
+Profile,combo: All downloaded,select Not reviewed,0.3,,ok,
+Profile,combo: All downloaded,select Reviewed,0.3,,ok,
+Game data,Import PGN,load synthetic two-ply game,11.1,,ok,plies=2; final_fen=rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2
+Game data,Export PGN,write then parse exported PGN,0.7,,ok,exported=201 bytes; reparsed=True; result=*
+Lifecycle,Close window,close event + worker shutdown,,,ok,engine thread running=False
+Live read-only checks,Chess.com public archives API,HTTP GET,,311.5,ok,HTTP 200; archive months=233
+Live read-only checks,GitHub latest release API,HTTP GET,,11509.3,ok,HTTP 200; tag=v1.1.0; draft=False; prerelease=False
+Verification,Full unittest discovery,python -m unittest discover -q,,4042.0,ok,111 tests passed; expected malformed-PGN/password validation output only
+Verification,Compile check,python -m compileall -q offline_chess app_updater.py main.py tools/gui_entrypoint_audit.py,,536.8,ok,all modules compiled
+Verification,Diff whitespace check,git diff --check,,466.9,ok,no whitespace errors
+Verification,GUI sweep summary,"desktop controls, tabs, fields, combos, gameplay and async flows",,,ok,168 GUI rows; 8 controls disabled in tested state; zero exceptions
+Packaging,PyInstaller Windows one-file build,python -m PyInstaller --noconfirm --clean OfflineChess.spec,,41855.0,ok,"OfflineChess.exe built successfully; final artifact 135,080,681 bytes"
+Packaging,dist/OfflineChess.exe,isolated frozen startup smoke (8s),,8325.8,ok,process remained alive through 8s startup; isolated profile cleaned afterward
+Live read-only checks,Telemetry collector POST,synthetic check-in/feedback submission,,,skipped,Skipped per user instruction because guaranteed deletion is unavailable

@@ -90,6 +90,7 @@ class ChessWindow(QMainWindow):
         self.game_result_override: Optional[str] = None
         self.game_version = 0
         self.openings: list[Opening] = []; self.book_path: Optional[str] = None
+        self._closing=False;self._opening_load_lock=threading.Lock()
         self.review_token=0; self.sound_enabled = True; self.sounds = {}; self.explorer_dialog=None
         self.review_progress_dialog=None
         self.puzzle_dialog=None;self.puzzle_token=0
@@ -483,9 +484,11 @@ class ChessWindow(QMainWindow):
         """
 
     def _load_default_openings(self):
-        candidates=[]
+        candidates=[];seen=set()
         for folder in (BUNDLE_DIR,BUNDLE_DIR/"openings",APP_DIR,APP_DIR/"openings"):
-            candidates.extend(discover_lichess_files(folder))
+            for path in discover_lichess_files(folder):
+                key=path.resolve()
+                if key not in seen:seen.add(key);candidates.append(path)
         if candidates: self._load_paths_async(candidates)
 
     def load_opening_dialog(self):
@@ -501,8 +504,11 @@ class ChessWindow(QMainWindow):
         self.opening_label.setText("Loading Lichess openings…")
         def load():
             entries=load_openings(paths)
-            self.openings_loaded.emit(entries,paths)
-        threading.Thread(target=load,daemon=True,name="Opening database loader").start()
+            with self._opening_load_lock:
+                if not self._closing:self.openings_loaded.emit(entries,paths)
+        thread=threading.Thread(target=load,daemon=True,name="Opening database loader")
+        thread.start()
+        return thread
 
     def _set_openings(self,entries,paths):
         self.openings=entries
@@ -1717,6 +1723,7 @@ class ChessWindow(QMainWindow):
             sound.setnchannels(1); sound.setsampwidth(2); sound.setframerate(rate); sound.writeframes(b"".join(frames))
         return destination
     def closeEvent(self,event):
+        with self._opening_load_lock:self._closing=True
         if self.review_speech:self.review_speech.stop()
         self.worker.stop_event.set()
         self.shutdown_request.emit()

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import os
 import sqlite3
 import tempfile
+import threading
 import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -12,7 +13,8 @@ os.environ.setdefault("QT_QPA_PLATFORM","offscreen")
 
 try:
     import chess
-    from PyQt6.QtCore import QEvent, Qt
+    from PyQt6 import sip
+    from PyQt6.QtCore import QEvent, QObject, Qt, pyqtSignal
     from PyQt6.QtGui import QImage, QKeyEvent, QPainter
     from main import (
         analyze_review_events,
@@ -65,11 +67,15 @@ try:
         BOARD_THEMES,
         PIECE_STYLES,
         QPushButton,
+        QLabel,
         QHeaderView,
         ReviewSummaryDialog,
         annotate_review_pgn,
         MistakePracticeDialog,
     )
+    from offline_chess.ui import main_window as main_window_module
+    from offline_chess.ui.main_window import ChessWindow as MainWindowUi
+    from offline_chess.openings import opening_from_file
     TEST_IMPORT_ERROR=None
 except (ImportError,SystemExit) as exc:
     chess=None
@@ -111,6 +117,84 @@ class ReviewAnalysisTests(unittest.TestCase):
         try:board.render(painter)
         finally:painter.end()
         self.assertEqual(image.pixelColor(40,40).alpha(),255)
+
+    def test_chess_board_renders_best_move_arrow(self):
+        app=QApplication.instance() or QApplication([])
+        board=ChessBoard();board.resize(640,640)
+        board.set_position(chess.Board(),best_move=chess.Move.from_uci("e2e4"))
+        image=QImage(640,640,QImage.Format.Format_ARGB32);image.fill(0)
+        painter=QPainter(image)
+        try:board.render(painter)
+        finally:painter.end()
+        self.assertEqual(image.pixelColor(40,40).alpha(),255)
+
+    def test_opening_loader_does_not_emit_after_window_close(self):
+        app=QApplication.instance() or QApplication([])
+        started=threading.Event();release=threading.Event();thread_errors=[]
+
+        class LoaderHarness(QObject):
+            openings_loaded=pyqtSignal(object,object)
+            _load_paths_async=MainWindowUi._load_paths_async
+
+        harness=LoaderHarness()
+        harness.opening_label=QLabel()
+        harness._closing=False
+        harness._opening_load_lock=threading.Lock()
+        loaded=[]
+        harness.openings_loaded.connect(lambda entries,paths:loaded.append((entries,paths)))
+
+        def slow_load(_paths):
+            started.set()
+            release.wait(2)
+            return []
+
+        def capture_thread_error(args):
+            thread_errors.append(args.exc_value)
+
+        with patch("offline_chess.ui.main_window.load_openings",side_effect=slow_load), \
+                patch.object(threading,"excepthook",side_effect=capture_thread_error):
+            loader=harness._load_paths_async([Path("a.tsv")])
+            self.assertTrue(started.wait(2))
+            harness._closing=True
+            sip.delete(harness)
+            release.set()
+            loader.join(2)
+
+        self.assertFalse(loader.is_alive())
+        self.assertEqual(thread_errors,[])
+        self.assertEqual(loaded,[])
+        app.processEvents()
+
+    def test_opening_position_key_cache_preserves_catalog_output(self):
+        path=Path(self._test_data_directory.name)/"openings.tsv"
+        path.write_text(
+            "eco\tname\tpgn\n"
+            "C20\tKing's Pawn Game\t1. e4 e5\n"
+            "C40\tKing's Knight Opening\t1. e4 e5 2. Nf3\n"
+            "B20\tSicilian Defense\t1. e4 c5\n"
+            "B30\tSicilian Closed\t1. e4 c5 2. Nc3\n",
+            encoding="utf-8",
+        )
+        expected=opening_from_file(path)
+        cache={}
+        actual=opening_from_file(path,cache)
+
+        self.assertEqual(actual,expected)
+        self.assertLess(len(cache),sum(len(item.position_keys) for item in actual))
+
+    def test_default_opening_discovery_deduplicates_bundle_and_app_paths(self):
+        with tempfile.TemporaryDirectory(dir=os.getcwd()) as folder:
+            root=Path(folder)
+            paths=[root/"openings"/f"{letter}.tsv" for letter in "abcde"]
+            loaded=[]
+            harness=SimpleNamespace(_load_paths_async=lambda found:loaded.append(found))
+            with patch.object(main_window_module,"BUNDLE_DIR",root), \
+                    patch.object(main_window_module,"APP_DIR",root), \
+                    patch.object(main_window_module,"discover_lichess_files",return_value=paths) as discover:
+                MainWindowUi._load_default_openings(harness)
+
+        self.assertEqual(discover.call_count,4)
+        self.assertEqual(loaded,[paths])
 
     def test_chesscom_eco_codes_display_readable_opening_names(self):
         self.assertEqual(chesscom_opening_label("A02"),"Bird Opening · A02")

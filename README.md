@@ -63,7 +63,7 @@ The app looks for `stockfish.exe` beside `main.py`. Set the `STOCKFISH_PATH` env
 
 Tagged releases build a single `OfflineChess.exe` that includes Stockfish and the Lichess opening database. The app checks the public GitHub Releases page in the background when it starts. If a newer release is available, it offers to download and install it, verifies the published SHA-256 checksum, then restarts with the new version. Run the EXE from a folder your Windows account can write to, such as Downloads or a folder under your user profile.
 
-To publish a release, update `APP_VERSION` in `offline_chess/config.py`, commit the change, create the matching tag (for example `v0.10.4`), and push the tag. GitHub Actions runs the test suite, builds and publishes the EXE and checksum, license notices, and the corresponding Stockfish source and network files. The release tag must match `APP_VERSION`.
+To publish a release, update `APP_VERSION` in `offline_chess/config.py`, commit the change, create the matching tag (for example `v1.1.1`), and push the tag. GitHub Actions runs the test suite, builds and publishes the EXE and checksum, license notices, and the corresponding Stockfish source and network files. The release tag must match `APP_VERSION`.
 
 To build locally on Windows after installing the runtime dependencies, run `python -m PyInstaller --noconfirm --clean OfflineChess.spec`. The one-file build extracts its engine and opening database into a temporary folder while it runs. Profiles and downloaded games remain in the user's local application data folder, outside the EXE.
 

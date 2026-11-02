@@ -31,7 +31,9 @@ def parse_pgn_line(text: str) -> list[chess.Move]:
     return list(game.mainline_moves()) if game is not None else []
 
 
-def opening_from_file(path: Path) -> list[Opening]:
+def opening_from_file(path: Path, position_key_cache=None) -> list[Opening]:
+    if position_key_cache is None:
+        position_key_cache = {}
     result = []
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.reader(handle, delimiter="\t")
@@ -52,7 +54,12 @@ def opening_from_file(path: Path) -> list[Opening]:
                         raise ValueError("illegal move in opening line")
                     sans.append(board.san(move))
                     board.push(move)
-                    keys.append(position_key(board))
+                    cache_key = (board.chess960, board._transposition_key())
+                    key = position_key_cache.get(cache_key)
+                    if key is None:
+                        key = position_key(board)
+                        position_key_cache[cache_key] = key
+                    keys.append(key)
                 if sans:
                     result.append(Opening(eco, name, tuple(sans), tuple(keys)))
             except (ValueError, AssertionError):
@@ -62,9 +69,10 @@ def opening_from_file(path: Path) -> list[Opening]:
 
 def load_openings(paths: list[Path]) -> list[Opening]:
     all_openings = []
+    position_key_cache = {}
     for path in paths:
         try:
-            all_openings.extend(opening_from_file(path))
+            all_openings.extend(opening_from_file(path, position_key_cache))
         except (OSError, UnicodeError, csv.Error):
             continue
     return all_openings
