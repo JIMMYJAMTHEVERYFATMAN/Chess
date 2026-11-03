@@ -6,6 +6,7 @@ import os
 import sqlite3
 import tempfile
 import threading
+import time
 import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -59,6 +60,7 @@ try:
         format_review_impact,
         review_focus_squares,
         review_spoken_text,
+        review_text_for_viewer,
         rank_review_moments,
         review_moment_tags,
         QApplication,
@@ -70,12 +72,14 @@ try:
         QLabel,
         QHeaderView,
         ReviewSummaryDialog,
+        ReviewProgressDialog,
         annotate_review_pgn,
         MistakePracticeDialog,
     )
     from offline_chess.ui import main_window as main_window_module
     from offline_chess.ui.main_window import ChessWindow as MainWindowUi
-    from offline_chess.openings import opening_from_file
+    from offline_chess.ui.position_lab import PositionAnalysisPage
+    from offline_chess.openings import detect_opening, find_opening_ply, index_openings, opening_from_file
     TEST_IMPORT_ERROR=None
 except (ImportError,SystemExit) as exc:
     chess=None
@@ -109,6 +113,114 @@ class ReviewAnalysisTests(unittest.TestCase):
         if self._previous_xdg_data_home is None:os.environ.pop("XDG_DATA_HOME",None)
         else:os.environ["XDG_DATA_HOME"]=self._previous_xdg_data_home
 
+    def test_import_pgn_scanner_flags_unparsed_movetext(self):
+        pgn='[Event "Test"]\n\n1. e4 e5 2. Nf3 Kg9 *\n'
+        self.assertEqual(main_window_module._unparsed_pgn_token(pgn),"Kg9")
+
+    def test_import_pgn_recognizes_malformed_san_parse_errors(self):
+        game=chess.pgn.read_game(io.StringIO("1. e4 e5 2. Nf3 Bxg2 *"))
+        self.assertTrue(main_window_module._is_pgn_move_parse_error(game.errors[0]))
+        self.assertEqual(len(list(game.mainline_moves())),3)
+        self.assertFalse(main_window_module._is_pgn_move_parse_error(ValueError("invalid FEN")))
+
+    def test_import_pgn_scanner_ignores_valid_annotations_comments_and_variations(self):
+        pgn='[Event "Test"]\n\n1. e4+ {invalid Kg9}\n(1. d4!? d5) e5 2. Nf3 *\n'
+        self.assertIsNone(main_window_module._unparsed_pgn_token(pgn))
+
+    def test_import_pgn_scanner_ignores_games_after_first_parsed_game(self):
+        pgn='1. e4 e5 *\n\n1. Kg9 *\n'
+        source=io.StringIO(pgn)
+        chess.pgn.read_game(source)
+        first_game_text=pgn[:source.tell()]
+        self.assertIsNone(main_window_module._unparsed_pgn_token(first_game_text))
+
+    def test_import_pgn_rejects_empty_inputs_without_changing_game_state(self):
+        cases=(("", "No game"), ('[Event "Header only"]\n[White "A"]\n\n', "no moves"))
+        for text,error_text in cases:
+            with self.subTest(text=text), tempfile.TemporaryDirectory(dir=os.getcwd()) as folder:
+                path=Path(folder)/"empty.pgn"
+                path.write_text(text,encoding="utf-8")
+                board=chess.Board();board.push_san("e4");board_fen=board.fen();history=[chess.Move.from_uci("e2e4")]
+                target=SimpleNamespace(marker="unchanged",board=board,history=history)
+                with patch.object(main_window_module.QFileDialog,"getOpenFileName",return_value=(str(path),"")), \
+                     patch.object(main_window_module.QMessageBox,"critical") as error_dialog:
+                    MainWindowUi.import_pgn(target)
+                self.assertEqual(target.marker,"unchanged")
+                self.assertIs(target.board,board);self.assertEqual(board.fen(),board_fen)
+                self.assertIs(target.history,history)
+                error_dialog.assert_called_once()
+                self.assertIn(error_text.lower(),error_dialog.call_args.args[2].lower())
+
+    def test_import_pgn_rejects_invalid_utf8_with_clear_message_and_preserves_game(self):
+        with tempfile.TemporaryDirectory(dir=os.getcwd()) as folder:
+            path=Path(folder)/"invalid-encoding.pgn"
+            path.write_bytes(b"\xff\xfe")
+            board=chess.Board();board.push_san("e4");fen=board.fen();history=[chess.Move.from_uci("e2e4")]
+            target=SimpleNamespace(board=board,history=history,marker="unchanged")
+            with patch.object(main_window_module.QFileDialog,"getOpenFileName",return_value=(str(path),"")), \
+                 patch.object(main_window_module.QMessageBox,"critical") as error_dialog:
+                MainWindowUi.import_pgn(target)
+            self.assertEqual(target.marker,"unchanged")
+            self.assertIs(target.board,board);self.assertEqual(board.fen(),fen)
+            self.assertIs(target.history,history)
+            self.assertEqual(error_dialog.call_args.args[2],"This file is not valid UTF-8 text.")
+
+    def test_import_pgn_loads_legal_prefix_and_flags_malformed_text_inline(self):
+        class StatusBar:
+            def showMessage(self,message,*_args):self.message=message
+        def make_target():
+            return SimpleNamespace(
+                review_token=0,worker=SimpleNamespace(review_cancel_event=threading.Event()),review_busy=False,
+                review_btn=MagicMock(),analysis_level=MagicMock(),_update_syzygy_button=MagicMock(),
+                external_review_game_id="old",external_review_username="old",external_review_players={"old":"old"},
+                external_review_ratings={"old":1000},external_review_clocks=[1],game_version=0,
+                game_start_board=chess.Board(),history=[],board=chess.Board(),review_moves=[],reviewing=False,
+                review_index=0,last_move=None,rating_eligible=True,player_color=chess.WHITE,
+                side_choice=MagicMock(),game_result_override=None,review_table=MagicMock(),progress=MagicMock(),
+                _reset_review_surfaces=MagicMock(),_update_player_labels=MagicMock(),turn_label=MagicMock(),
+                _render_history=MagicMock(),_sync_board=MagicMock(),_update_opening=MagicMock(),
+                statusBar=lambda:status_bar,
+            )
+        cases=(
+            ('1. e4 e5 2. Nf3 Kg9 *','invalid token \'Kg9\''),
+            ('1. e4 e5 2. Nf3 Bxg2 *','illegal san: \'Bxg2\''),
+        )
+        for text,expected_warning in cases:
+            with self.subTest(expected_warning=expected_warning), tempfile.TemporaryDirectory(dir=os.getcwd()) as folder:
+                path=Path(folder)/"partial.pgn";path.write_text(text,encoding="utf-8")
+                status_bar=StatusBar();target=make_target()
+                with patch.object(main_window_module.QFileDialog,"getOpenFileName",return_value=(str(path),"")):
+                    MainWindowUi.import_pgn(target)
+                self.assertEqual(len(target.history),3)
+                self.assertEqual(target.board.fen(),"rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2")
+                self.assertIn(expected_warning,status_bar.message)
+                self.assertIn("loaded legal prefix only",status_bar.message)
+                self.assertEqual(target.turn_label.setText.call_args.args[0],"Stockfish to move · Black")
+
+    def test_import_pgn_keeps_blocking_header_errors_out_of_current_game(self):
+        with tempfile.TemporaryDirectory(dir=os.getcwd()) as folder:
+            path=Path(folder)/"bad-fen.pgn"
+            path.write_text('[FEN "bad"]\n\n1. e4 *',encoding="utf-8")
+            target=SimpleNamespace(marker="unchanged")
+            with patch.object(main_window_module.QFileDialog,"getOpenFileName",return_value=(str(path),"")), \
+                 patch.object(main_window_module.QMessageBox,"critical") as error_dialog:
+                MainWindowUi.import_pgn(target)
+            self.assertEqual(target.marker,"unchanged")
+            self.assertIn("could not be read",error_dialog.call_args.args[2])
+
+    def test_game_hint_distinguishes_engine_turn_from_active_search(self):
+        for bot_busy,expected in ((False,"Stockfish to move"),(True,"Stockfish is thinking")):
+            with self.subTest(bot_busy=bot_busy):
+                target=SimpleNamespace(
+                    reviewing=False,board=chess.Board(),player_color=chess.BLACK,bot_busy=bot_busy,
+                    history=[],review_moves=[],review_index=0,last_move=None,selected=None,best_move=None,
+                    board_widget=MagicMock(),momentum_chart=MagicMock(),play_hint=MagicMock(),
+                    _display_board=lambda:chess.Board(),_game_finished=lambda:False,
+                    _update_chesscom_clocks=MagicMock(),openings=[],opening_position_index={},
+                )
+                MainWindowUi._sync_board(target)
+                self.assertTrue(target.play_hint.setText.call_args.args[0].startswith(expected))
+
     def test_chess_board_renders_initial_position(self):
         app=QApplication.instance() or QApplication([])
         board=ChessBoard();board.resize(640,640)
@@ -127,6 +239,109 @@ class ReviewAnalysisTests(unittest.TestCase):
         try:board.render(painter)
         finally:painter.end()
         self.assertEqual(image.pixelColor(40,40).alpha(),255)
+
+    def test_position_analysis_uses_one_deadline_bound_multipv_search_for_selected_side(self):
+        class TimedAnalysis:
+            def __init__(self,lines):
+                self.multipv=lines
+                self.stop_requested=threading.Event()
+            def __enter__(self):return self
+            def __exit__(self,*_args):self.stop()
+            def wait(self):self.stop_requested.wait(1)
+            def stop(self):self.stop_requested.set()
+
+        class FakeEngine:
+            def __init__(self):self.calls=[];self.analysis_result=None
+            def analysis(self,board,limit,*,multipv):
+                self.calls.append((board.copy(stack=False),limit.time,multipv))
+                moves=list(board.legal_moves)[:multipv]
+                lines=[{"score":chess.engine.PovScore(chess.engine.Cp(30-index),board.turn),"pv":[move]}
+                       for index,move in enumerate(moves)]
+                self.analysis_result=TimedAnalysis(lines)
+                return self.analysis_result
+
+        board=chess.Board();board.turn=chess.BLACK
+        worker=EngineWorker();worker.engine=FakeEngine();worker.option_names={"MultiPV"};worker._multipv_max=8
+        result=[];worker.position_analysis_done.connect(result.append)
+        started=time.monotonic()
+        worker.analyze_position((7,board,.05))
+        elapsed=time.monotonic()-started
+
+        self.assertEqual(len(worker.engine.calls),1)
+        searched_board,search_limit,multipv=worker.engine.calls[0]
+        self.assertEqual(searched_board.turn,chess.BLACK)
+        self.assertEqual(multipv,3)
+        self.assertLessEqual(search_limit,.05)
+        self.assertTrue(worker.engine.analysis_result.stop_requested.is_set())
+        self.assertLess(elapsed,.5)
+        self.assertEqual(set(result[0]["results"]),{"Black"})
+        self.assertEqual(len(result[0]["results"]["Black"]),3)
+
+    def test_position_lab_displays_only_the_selected_side(self):
+        app=QApplication.instance() or QApplication([])
+        page=PositionAnalysisPage()
+        self.assertFalse(page.white_panel.isHidden())
+        self.assertTrue(page.black_panel.isHidden())
+        self.assertEqual(page.depth_label.text(),"TOP 3 · WHITE TO MOVE")
+
+        page.black_to_move.setChecked(True)
+
+        self.assertTrue(page.white_panel.isHidden())
+        self.assertFalse(page.black_panel.isHidden())
+        self.assertEqual(page.depth_label.text(),"TOP 3 · BLACK TO MOVE")
+        requests=[];page.analysis_requested.connect(requests.append)
+        page.set_engine_ready(True)
+        page.time_choices[2].setChecked(True)
+        page.analyze_position()
+        self.assertEqual(len(requests),1)
+        self.assertEqual(requests[0][1].turn,chess.BLACK)
+        self.assertEqual(requests[0][2],2)
+        self.assertFalse(page.black_to_move.isEnabled())
+
+    def test_preindexed_opening_lookups_match_uncached_results(self):
+        board=chess.Board()
+        moves=[]
+        for san in ("e4","e5","Nf3","Nc6","Bb5","a6"):
+            move=board.parse_san(san);moves.append(move);board.push(move)
+        openings=opening_from_file(Path("openings")/"a.tsv")
+        index=index_openings(openings)
+
+        self.assertEqual(detect_opening(moves,openings,index),detect_opening(moves,openings))
+        self.assertEqual(find_opening_ply(moves,openings,index),find_opening_ply(moves,openings))
+
+    def test_quiet_level_two_practice_hint_reuses_review_events(self):
+        board=chess.Board();move=board.parse_san("h3");after=board.copy();after.push(move)
+        reply=after.parse_san("d5")
+        with patch("offline_chess.review_logic.analyze_review_events",
+                   wraps=analyze_review_events) as analyze:
+            hint=review_practice_hint(board,move,(move,reply),level=2)
+
+        self.assertEqual(analyze.call_count,1)
+        self.assertEqual(hint,"Compare forcing checks and captures first; if none work, improve your least active piece.")
+
+    def test_bot_reply_clears_thinking_status_but_preserves_game_over_message(self):
+        def play_bot_reply(game_ends=False):
+            board=chess.Board();board.push_san("e4")
+            status=SimpleNamespace(message="Stockfish is thinking…")
+            status.clearMessage=lambda:setattr(status,"message","")
+            state={"finished":False}
+            harness=SimpleNamespace(board=board,player_color=chess.WHITE,game_version=1,bot_busy=True)
+            harness.statusBar=lambda:status
+            harness._game_finished=lambda:state["finished"]
+            def push(move):
+                board.push(move)
+                state["finished"]=game_ends
+            harness._push=push
+            harness._after_move=lambda:setattr(status,"message","Game over") if game_ends else None
+            MainWindowUi._bot_move(harness,(1,board.fen(),chess.Move.from_uci("e7e5")))
+            return harness,status
+
+        harness,status=play_bot_reply()
+        self.assertEqual(status.message,"")
+        self.assertFalse(harness.bot_busy)
+
+        _harness,status=play_bot_reply(game_ends=True)
+        self.assertEqual(status.message,"Game over")
 
     def test_opening_loader_does_not_emit_after_window_close(self):
         app=QApplication.instance() or QApplication([])
@@ -1242,6 +1457,19 @@ class ReviewAnalysisTests(unittest.TestCase):
         self.assertEqual(dialog.selected_ply,17)
         self.assertEqual(dialog.result(),dialog.DialogCode.Accepted)
         dialog.deleteLater();app.processEvents()
+
+    def test_review_progress_dialog_initializes_elapsed_timer(self):
+        app=QApplication.instance() or QApplication([])
+        dialog=ReviewProgressDialog()
+        self.assertGreater(dialog.batch_started_at,0)
+        dialog.update_progress(1,2)
+        self.assertIn("move 1 of 2",dialog.status.text())
+        dialog.deleteLater();app.processEvents()
+
+    def test_review_explanations_are_personalized_for_reviewed_side(self):
+        item=SimpleNamespace(side="Black")
+        self.assertEqual(review_text_for_viewer("You found a strong move.",item,chess.WHITE),
+                         "Black found a strong move.")
 
     def test_current_position_practice_can_include_a_non_error_move(self):
         app=QApplication.instance() or QApplication([])

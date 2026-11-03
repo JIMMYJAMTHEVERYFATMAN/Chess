@@ -2,7 +2,7 @@
 
 A local chess analysis app built with PyQt6, `python-chess`, and Stockfish. Game records and PGNs stay on this computer. With reporting enabled, the app sends an installation check-in containing a random install ID, app version, last-seen time, and saved Chess.com username. You can turn check-ins off in **Profile → Overview**. Bug reports and feature suggestions are sent only when you submit them. Neither feature sends game history or PGNs.
 
-The **Position Lab** tab accepts a FEN and shows Stockfish's top three candidate moves for White and Black, with each side's evaluation and principal variation.
+The **Position Lab** tab accepts a FEN and shows Stockfish's top three candidate moves for the selected side to move, with evaluations and principal variations, within the selected time limit.
 
 The **Puzzles** tab offers engine focused tactics, total random puzzles, training based on downloaded Chess.com games and review weaknesses, forced mate challenges, and an escalating challenge run. Each puzzle has three lives. The challenge high score is saved in the local profile and shown in Profile.
 
@@ -37,7 +37,7 @@ The app looks for `stockfish.exe` beside `main.py`. Set the `STOCKFISH_PATH` env
 │       ├── main_window.py        # Main application window
 │       ├── profile_dialog.py     # Profile, dashboard, and Chess.com controls
 │       ├── review_dialogs.py     # Game review and coaching dialogs
-│       ├── position_lab.py       # FEN input and top-move comparison for both sides
+│       ├── position_lab.py       # FEN input and top-three analysis for the selected side
 │       ├── board.py              # Chessboard presentation and interaction
 │       ├── charts.py             # Profile charts
 │       ├── theme.py              # Board themes and piece styles
@@ -63,7 +63,7 @@ The app looks for `stockfish.exe` beside `main.py`. Set the `STOCKFISH_PATH` env
 
 Tagged releases build a single `OfflineChess.exe` that includes Stockfish and the Lichess opening database. The app checks the public GitHub Releases page in the background when it starts. If a newer release is available, it offers to download and install it, verifies the published SHA-256 checksum, then restarts with the new version. Run the EXE from a folder your Windows account can write to, such as Downloads or a folder under your user profile.
 
-To publish a release, update `APP_VERSION` in `offline_chess/config.py`, commit the change, create the matching tag (for example `v1.1.1`), and push the tag. GitHub Actions runs the test suite, builds and publishes the EXE and checksum, license notices, and the corresponding Stockfish source and network files. The release tag must match `APP_VERSION`.
+To publish a release, update `APP_VERSION` in `offline_chess/config.py`, commit the change, create the matching tag (for example `v1.1.2`), and push the tag. GitHub Actions runs the test suite, builds and publishes the EXE and checksum, license notices, and the corresponding Stockfish source and network files. The release tag must match `APP_VERSION`. Release notes include the matching version section from `CHANGELOG.md`.
 
 To build locally on Windows after installing the runtime dependencies, run `python -m PyInstaller --noconfirm --clean OfflineChess.spec`. The one-file build extracts its engine and opening database into a temporary folder while it runs. Profiles and downloaded games remain in the user's local application data folder, outside the EXE.
 

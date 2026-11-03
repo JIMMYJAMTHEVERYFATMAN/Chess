@@ -218,7 +218,7 @@ class _PositionEditorBoard(ChessBoard):
 
 
 class PositionAnalysisPage(QWidget):
-    """Set up a chess position and compare the strongest moves for both colors."""
+    """Set up a position and compare the strongest moves for the selected side."""
 
     analysis_requested = pyqtSignal(object)
 
@@ -377,15 +377,15 @@ class PositionAnalysisPage(QWidget):
         answer_title.setObjectName("SectionTitle")
         answer_heading.addWidget(answer_title)
         answer_heading.addStretch()
-        self.depth_label = QLabel("TOP 3 · BOTH SIDES")
+        self.depth_label = QLabel("TOP 3 · WHITE TO MOVE")
         self.depth_label.setObjectName("Muted")
         answer_heading.addWidget(self.depth_label)
         layout.addLayout(answer_heading)
 
-        self.white_table, white_panel = self._create_results_panel("WHITE TO MOVE")
-        layout.addWidget(white_panel)
-        self.black_table, black_panel = self._create_results_panel("BLACK TO MOVE")
-        layout.addWidget(black_panel)
+        self.white_table, self.white_panel = self._create_results_panel("WHITE TO MOVE")
+        layout.addWidget(self.white_panel)
+        self.black_table, self.black_panel = self._create_results_panel("BLACK TO MOVE")
+        layout.addWidget(self.black_panel)
 
         self.status_label = QLabel("Waiting for Stockfish to start…")
         self.status_label.setObjectName("Muted")
@@ -481,8 +481,16 @@ class PositionAnalysisPage(QWidget):
         with QSignalBlocker(self.black_to_move):
             self.black_to_move.setChecked(self.position.turn == chess.BLACK)
         self._sync_castling_controls()
+        self._update_selected_side()
         self._clear_results()
         self._reset_line_state()
+
+    def _update_selected_side(self):
+        color = self.position.turn
+        label = "WHITE" if color == chess.WHITE else "BLACK"
+        self.depth_label.setText(f"TOP 3 · {label} TO MOVE")
+        self.white_panel.setVisible(color == chess.WHITE)
+        self.black_panel.setVisible(color == chess.BLACK)
 
     def _sync_castling_controls(self):
         for checkbox, color, square_bit in self.castling_checks:
@@ -575,9 +583,13 @@ class PositionAnalysisPage(QWidget):
         self.load_fen_button.setEnabled(False)
         self.clear_button.setEnabled(False)
         self.reset_button.setEnabled(False)
+        self.white_to_move.setEnabled(False)
+        self.black_to_move.setEnabled(False)
         seconds = self.time_group.checkedId()
-        self.depth_label.setText(f"UP TO {seconds}s PER SIDE")
-        self.status_label.setText("Stockfish is comparing the strongest moves for White and Black…")
+        color = self.position.turn
+        label = "White" if color == chess.WHITE else "Black"
+        self.depth_label.setText(f"TOP 3 · {label.upper()} · UP TO {seconds}s")
+        self.status_label.setText(f"Stockfish is finding the top three moves for {label}…")
         self._clear_results()
         self.analysis_requested.emit((self._request_token, self.position.copy(stack=False), seconds))
 
@@ -588,6 +600,8 @@ class PositionAnalysisPage(QWidget):
         self.load_fen_button.setEnabled(True)
         self.clear_button.setEnabled(True)
         self.reset_button.setEnabled(True)
+        self.white_to_move.setEnabled(True)
+        self.black_to_move.setEnabled(True)
         self.analyze_button.setEnabled(self._engine_ready)
         if payload.get("fen") != self.position.fen():
             return
@@ -599,14 +613,13 @@ class PositionAnalysisPage(QWidget):
         self._results = payload.get("results", {"White": [], "Black": []})
         self._fill_table(self.white_table, self._results.get("White", []))
         self._fill_table(self.black_table, self._results.get("Black", []))
-        active_color = self.turn_group.checkedId()
+        active_color = payload.get("color", self.position.turn)
         selected_table = self._table_for_color(active_color)
-        if selected_table.rowCount() == 0:
-            selected_table = self._table_for_color(not active_color)
         if selected_table.rowCount():
             selected_table.selectRow(0)
             self._select_candidate(selected_table, 0)
-        self.status_label.setText("Analysis complete · scores are from each moving side's perspective.")
+        label = "White" if active_color == chess.WHITE else "Black"
+        self.status_label.setText(f"Top moves for {label} are ready.")
 
     def _fill_table(self, table: QTableWidget, rows):
         table.setRowCount(len(rows))

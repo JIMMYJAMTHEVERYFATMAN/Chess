@@ -29,6 +29,9 @@ from offline_chess.ui.main_window import ChessWindow
 from offline_chess.ui.profile_dialog import ProfileDialog
 from offline_chess.ui.feedback_dialog import FeedbackDialog
 
+# The smoke sweep must not make or persist a privacy choice.
+main_window_module.ChessWindow._begin_usage_reporting = lambda self: None
+
 
 rows: list[dict[str, str]] = []
 uncaught: list[str] = []
@@ -89,6 +92,7 @@ def wait_until(predicate, timeout=15):
 
 
 app = QApplication.instance() or QApplication([])
+ENGINE_HEAVY_BUTTONS = {"Explore this opening", "Find puzzle in game", "Generate puzzle"}
 startup = time.perf_counter()
 window = ChessWindow()
 constructed_ms = (time.perf_counter() - startup) * 1000
@@ -132,9 +136,16 @@ for tabs in window.findChildren(tabs_type):
                 window.set_mode(mode)
                 pump(app, 12)
                 for button in window.findChildren(QAbstractButton):
+                    if button is window.position_lab.analyze_button:
+                        continue  # Measured once below with the selected time limit.
                     if not button.isVisible():
                         continue
                     text = button.text().replace("&", "").strip() or button.accessibleName() or button.objectName() or "unnamed button"
+                    if text in ENGINE_HEAVY_BUTTONS:
+                        rows.append({"group": "Game window", "entry_point": f"{mode}: {text}", "action": "button click",
+                                     "ui_response_ms": "", "end_to_end_ms": "", "status": "skipped",
+                                     "details": "worker-intensive action excluded from response-time sweep"})
+                        continue
                     identity = (text, button.objectName())
                     if identity in main_seen:
                         continue
@@ -149,9 +160,16 @@ for tabs in window.findChildren(tabs_type):
         elif tabs is window.main_tabs:
             pump(app, 12)
             for button in window.findChildren(QAbstractButton):
+                if button is window.position_lab.analyze_button:
+                    continue  # Measured once below with the selected time limit.
                 if not button.isVisible():
                     continue
                 text = button.text().replace("&", "").strip() or button.accessibleName() or button.objectName() or "unnamed button"
+                if text in ENGINE_HEAVY_BUTTONS:
+                    rows.append({"group": "Game window", "entry_point": f"{label}: {text}", "action": "button click",
+                                 "ui_response_ms": "", "end_to_end_ms": "", "status": "skipped",
+                                 "details": "worker-intensive action excluded from response-time sweep"})
+                    continue
                 identity = (text, button.objectName())
                 if identity in main_seen:
                     continue
@@ -187,15 +205,18 @@ analysis_started = time.perf_counter()
 record("Position Lab", "Analyze position", "request Stockfish analysis", lab.analyze_button.click)
 analysis_done = wait_until(lambda: bool(position_results), 12)
 rows[-1]["end_to_end_ms"] = f"{(time.perf_counter()-analysis_started)*1000:.1f}"
+selected_side = "White" if lab.position.turn == chess.WHITE else "Black"
+candidates = []
 valid = False
 if position_results:
     payload = position_results[-1]
     signal_payload = payload[-1] if isinstance(payload[-1], dict) else {}
     analysis_payload = signal_payload.get("results", {})
-    valid = all(isinstance(analysis_payload.get(side), list) and len(analysis_payload[side]) >= 1
-                for side in ("White", "Black"))
+    candidates = analysis_payload.get(selected_side, [])
+    valid = (1 <= len(candidates) <= 3
+             and all(row.get("move") in lab.position.legal_moves for row in candidates))
 rows[-1]["status"] = "ok" if analysis_done is not None and valid else "error"
-rows[-1]["details"] = f"analysis completion observed={analysis_done is not None}; both sides have candidates={valid}"
+rows[-1]["details"] = f"analysis completion observed={analysis_done is not None}; selected side={selected_side}; legal candidates={len(candidates) if position_results else 0}"
 
 # Profile is isolated. Exercise each tab, every button and combo value;
 # dialogs, file choosers, desktop links, and network calls are stubbed.
@@ -213,6 +234,11 @@ for index in range(profile.tabs.count()):
     profile_seen: set[tuple[str, str]] = set()
     for button in profile.findChildren(QAbstractButton):
         label_button = button.text().replace("&", "").strip() or button.accessibleName() or button.objectName() or "unnamed button"
+        if button is profile.usage_reporting_toggle:
+            rows.append({"group": "Profile", "entry_point": label_button, "action": "button click",
+                         "ui_response_ms": "", "end_to_end_ms": "", "status": "skipped",
+                         "details": "privacy setting intentionally excluded from automated interaction"})
+            continue
         identity = (label_button, button.objectName())
         if identity in profile_seen:
             continue

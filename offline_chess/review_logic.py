@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -1300,6 +1301,7 @@ def review_practice_hint(board: chess.Board, best_move: chess.Move,
         return "Compare forcing checks and captures first; then improve your least active piece."
     themes=tactical_themes(board,best_move)
     after=board.copy(stack=False);after.push(best_move)
+    events=None
     if level>=2:
         if "Fork" in themes:
             targets=fork_targets(board,best_move)
@@ -1371,9 +1373,10 @@ def review_practice_hint(board: chess.Board, best_move: chess.Move,
     )
     for theme,hint in tactical_hints:
         if theme in themes:return hint
-    response=best_pv[1] if len(best_pv)>1 and best_pv[1] in after.legal_moves else None
-    response_pv=best_pv[2:10] if response else ()
-    events=analyze_review_events(board,best_move,after,best_move,response,best_pv[:10],response_pv=response_pv)
+    if events is None:
+        response=best_pv[1] if len(best_pv)>1 and best_pv[1] in after.legal_moves else None
+        response_pv=best_pv[2:10] if response else ()
+        events=analyze_review_events(board,best_move,after,best_move,response,best_pv[:10],response_pv=response_pv)
     positional_hints={
         "central_control":"Look for a move that expands your control of the central squares.",
         "development":"Look for a developing move that gives a piece more useful squares.",

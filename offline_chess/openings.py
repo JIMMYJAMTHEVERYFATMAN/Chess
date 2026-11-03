@@ -82,15 +82,22 @@ def discover_lichess_files(folder: Path) -> list[Path]:
     return [folder / f"{letter}.tsv" for letter in "abcde" if (folder / f"{letter}.tsv").is_file()]
 
 
-def detect_opening(moves: list[chess.Move], openings: list[Opening]) -> str:
-    if not openings:
-        return "Opening database not loaded"
+def index_openings(openings: list[Opening]) -> dict[str, tuple[int, Opening]]:
+    """Index each known position by its deepest matching opening line."""
     by_position = {}
     for opening in openings:
         for ply, key in enumerate(opening.position_keys, 1):
             current = by_position.get(key)
             if current is None or ply > current[0]:
                 by_position[key] = (ply, opening)
+    return by_position
+
+
+def detect_opening(moves: list[chess.Move], openings: list[Opening], by_position=None) -> str:
+    if not openings:
+        return "Opening database not loaded"
+    if by_position is None:
+        by_position = index_openings(openings)
     board = chess.Board()
     match = None
     for ply, move in enumerate(moves, 1):
@@ -106,9 +113,12 @@ def detect_opening(moves: list[chess.Move], openings: list[Opening]) -> str:
     return "Opening not found in local database"
 
 
-def find_opening_ply(moves: list[chess.Move], openings: list[Opening]) -> int:
-    known_positions = {key for opening in openings for key in opening.position_keys}
-    if not known_positions:
+def find_opening_ply(moves: list[chess.Move], openings: list[Opening], by_position=None) -> int:
+    if not openings:
+        return 0
+    if by_position is None:
+        by_position = {key for opening in openings for key in opening.position_keys}
+    if not by_position:
         return 0
     board = chess.Board()
     last = 0
@@ -116,7 +126,7 @@ def find_opening_ply(moves: list[chess.Move], openings: list[Opening]) -> int:
         if move not in board.legal_moves:
             break
         board.push(move)
-        if position_key(board) in known_positions:
+        if position_key(board) in by_position:
             last = ply
     return last
 

@@ -7,6 +7,7 @@ import json
 import math
 import os
 import random
+import re
 import struct
 import sys
 import tempfile
@@ -60,6 +61,25 @@ from .review_dialogs import *
 from .position_lab import PositionAnalysisPage
 from .theme import *
 
+def _unparsed_pgn_token(text):
+    """Return the first non-PGN token ignored by python-chess, if any."""
+    def blank(match):
+        return re.sub(r"[^\n]", " ", match.group())
+
+    text = re.sub(r"\{.*?\}|;[^\r\n]*|^%[^\r\n]*", blank, text, flags=re.S | re.M)
+    for line in text.splitlines():
+        if line.lstrip().startswith("["):
+            continue
+        remainder = chess.pgn.MOVETEXT_REGEX.sub("", line)
+        remainder = re.sub(r"\d+\.{1,3}|\be\.p\.?\b|[+#]", " ", remainder, flags=re.I)
+        token = re.search(r"\S+", remainder)
+        if token:
+            return token.group()
+    return None
+
+def _is_pgn_move_parse_error(error):
+    return str(error).lower().startswith(("illegal san:", "invalid san:", "ambiguous san:"))
+
 class ChessWindow(QMainWindow):
     engine_request = pyqtSignal(object)
     bot_request = pyqtSignal(object)
@@ -89,7 +109,7 @@ class ChessWindow(QMainWindow):
         self.review_busy = False; self.bot_busy = False; self.engine_ready = False; self.engine_startup_timed_out = False
         self.game_result_override: Optional[str] = None
         self.game_version = 0
-        self.openings: list[Opening] = []; self.book_path: Optional[str] = None
+        self.openings: list[Opening] = []; self.opening_position_index = {}; self.book_path: Optional[str] = None
         self._closing=False;self._opening_load_lock=threading.Lock()
         self.review_token=0; self.sound_enabled = True; self.sounds = {}; self.explorer_dialog=None
         self.review_progress_dialog=None
@@ -512,6 +532,7 @@ class ChessWindow(QMainWindow):
 
     def _set_openings(self,entries,paths):
         self.openings=entries
+        self.opening_position_index=index_openings(entries)
         self.opening_label.setText(f"{len(entries):,} Lichess openings" if entries else "Opening database not loaded")
         self.opening_label.setToolTip("\n".join(str(p) for p in paths))
         self.statusBar().showMessage(f"Loaded {len(entries):,} opening lines from Lichess TSV",5000)
@@ -729,7 +750,9 @@ class ChessWindow(QMainWindow):
         self.bot_busy=False
         version,position,move=result
         if version!=self.game_version or position!=self.board.fen():return
-        if move and move in self.board.legal_moves and not self._game_finished(): self._push(move); self._after_move()
+        if move and move in self.board.legal_moves and not self._game_finished():
+            self._push(move); self._after_move()
+            if self.board.turn==self.player_color and not self._game_finished():self.statusBar().clearMessage()
     def request_best(self):
         if not self.engine_ready or self._game_finished() or self.reviewing:return
         self.statusBar().showMessage("Finding the best move…"); self.best_request.emit(self.board.copy())
@@ -790,8 +813,8 @@ class ChessWindow(QMainWindow):
         elif self._game_finished():
             self.play_hint.setText("Game complete. Open Review to see the decisive moments and your next lesson.")
         else:
-            turn="Your move" if self.board.turn==self.player_color else "Stockfish is thinking"
-            self.play_hint.setText(f"{turn} · {len(self.history)} half-moves played · {detect_opening(self.history,self.openings)}")
+            turn="Your move" if self.board.turn==self.player_color else "Stockfish is thinking" if self.bot_busy else "Stockfish to move"
+            self.play_hint.setText(f"{turn} · {len(self.history)} half-moves played · {detect_opening(self.history,self.openings,self.opening_position_index)}")
     def _clear_review_overlays(self):
         self.review_show_best=False;self.review_show_reply=False
         self.best_view_btn.setChecked(False);self.reply_view_btn.setChecked(False)
@@ -914,7 +937,7 @@ class ChessWindow(QMainWindow):
 
     def _key_moments(self):
         moments=review_moment_tags(self.review_moves)
-        opening_ply=find_opening_ply(self.history,self.openings)
+        opening_ply=find_opening_ply(self.history,self.openings,self.opening_position_index)
         book_plies=[item.ply for item in self.review_moves if item.book_status.startswith("Book move")]
         if book_plies:opening_ply=max(book_plies)
         if opening_ply:moments.setdefault(opening_ply,[]).append("Last documented opening move")
@@ -1297,8 +1320,8 @@ class ChessWindow(QMainWindow):
             if review_start_ply is not None:
                 self.begin_move_review(review_start_ply);return
             result=self.game_result_override or (self.board.result() if self.board.is_game_over() else "*")
-            summary=ReviewSummaryDialog(items,detect_opening(self.history,self.openings),result,self.player_color,self,
-                                       find_opening_ply(self.history,self.openings),
+            summary=ReviewSummaryDialog(items,detect_opening(self.history,self.openings,self.opening_position_index),result,self.player_color,self,
+                                       find_opening_ply(self.history,self.openings,self.opening_position_index),
                                        getattr(self,"active_review_level","Standard"),self.syzygy_active);summary.setStyleSheet(self._stylesheet())
             if summary.exec()==QDialog.DialogCode.Accepted:self.begin_move_review(summary.selected_ply or 1)
 
@@ -1343,7 +1366,7 @@ class ChessWindow(QMainWindow):
         self.review_metric_turning.metric.setText(f"{worst.san} · {worst.expected_loss*100:.1f} pp")
         self.coach_overview.setText(player_review_overview(self.review_moves,self.player_color))
         self.coach_goal.setText("Next focus: "+personalized_review_coach(self.review_moves,self.player_color,self._saved_game_stats()))
-        self.coach_opening.setText("Opening: "+detect_opening(self.history,self.openings)+" · Explore responses or retry the mistakes that mattered.")
+        self.coach_opening.setText("Opening: "+detect_opening(self.history,self.openings,self.opening_position_index)+" · Explore responses or retry the mistakes that mattered.")
 
     def _reset_review_surfaces(self,message):
         if self.review_speech:self.review_speech.stop()
@@ -1354,7 +1377,7 @@ class ChessWindow(QMainWindow):
         self.detail_metrics.setText("Move quality, evaluation and engine alternatives will appear here.");self.detail.setText(message);self.detail_prompt.clear();self.detail_prompt.hide();self.detail_line.setText("");self.pv_step_btn.setEnabled(False);self.reply_pv_step_btn.setEnabled(False);self.reply_view_btn.setEnabled(False);self.export_review_btn.setEnabled(False)
         self.coach_overview.setText("Finish a game and run review to get a focused lesson plan.")
         self.coach_goal.setText("Next focus: complete a game for personalised feedback.")
-        self.coach_opening.setText("Opening: "+detect_opening(self.history,self.openings))
+        self.coach_opening.setText("Opening: "+detect_opening(self.history,self.openings,self.opening_position_index))
 
     def _current_pgn_text(self,include_review=False):
         game=chess.pgn.Game.from_board(self.game_start_board.copy(stack=False));node=game
@@ -1414,7 +1437,7 @@ class ChessWindow(QMainWindow):
                 "opponent_elo":self.elo_slider.value() if self.rating_eligible else None,
                 "elo_approx":int(self.elo_slider.value()<MIN_ELO),"user_accuracy":user_acc,
                 "white_accuracy":white_acc,"black_accuracy":black_acc,"plies":len(items),
-                "opening":detect_opening(self.history,self.openings),
+                "opening":detect_opening(self.history,self.openings,self.opening_position_index),
                 "average_loss":sum(losses)/len(losses) if losses else None,
                 "stats_json":json.dumps(self._review_stats(user_moves)),
                 "pgn":self._current_pgn_text() if self.profile_store.full_pgns_enabled() else None,
@@ -1646,13 +1669,22 @@ class ChessWindow(QMainWindow):
         path,_=QFileDialog.getOpenFileName(self,"Import PGN",str(APP_DIR),"PGN files (*.pgn);;All files (*)")
         if not path:return
         try:
-            with open(path,"r",encoding="utf-8-sig") as handle: game=chess.pgn.read_game(handle)
+            with open(path,"r",encoding="utf-8-sig") as handle:
+                pgn_text=handle.read()
+            pgn_source=io.StringIO(pgn_text); game=chess.pgn.read_game(pgn_source)
+            imported_pgn_text=pgn_text[:pgn_source.tell()]
             if game is None:raise ValueError("No game was found in this PGN")
-            if game.errors:raise ValueError(f"PGN contains invalid moves: {game.errors[0]}")
+            blocking_errors=[error for error in game.errors if not _is_pgn_move_parse_error(error)]
+            if blocking_errors:raise ValueError(f"PGN could not be read: {blocking_errors[0]}")
             moves=list(game.mainline_moves()); board=game.board();start_board=board.copy(stack=False)
+            if not moves:raise ValueError("This PGN contains no moves; the current game was kept")
             for move in moves:
                 if move not in board.legal_moves:raise ValueError("PGN contains an illegal move")
                 board.push(move)
+            move_error=next((error for error in game.errors if _is_pgn_move_parse_error(error)),None)
+            unparsed_token=_unparsed_pgn_token(imported_pgn_text)
+            warning=(f" · invalid token {unparsed_token!r}; loaded legal prefix only" if unparsed_token else
+                     f" · {str(move_error).split(' while parsing ',1)[0]}; loaded legal prefix only" if move_error else "")
             self.review_token+=1; self.worker.review_cancel_event.set(); self.review_busy=False; self.review_btn.setText("Review Game");self.analysis_level.setEnabled(True);self._update_syzygy_button()
             self.external_review_game_id=None;self.external_review_username=None
             self.external_review_players={};self.external_review_ratings={};self.external_review_clocks=[]
@@ -1663,8 +1695,11 @@ class ChessWindow(QMainWindow):
                 self.side_choice.blockSignals(True);self.side_choice.setCurrentIndex(0 if self.player_color==chess.WHITE else 1);self.side_choice.blockSignals(False)
             result=game.headers.get("Result","*"); self.game_result_override=result if result in ("1-0","0-1","1/2-1/2") and not board.is_game_over() else None
             self.review_table.setRowCount(0);self.progress.setValue(0);self._reset_review_surfaces("Review this game to calculate move quality and add it to your profile.")
-            self._update_player_labels();self._render_history(); self._sync_board(); self._update_opening(); self.statusBar().showMessage(f"Imported {len(moves)} plies")
-        except Exception as exc:QMessageBox.critical(self,"Import failed",str(exc))
+            self._update_player_labels();self.turn_label.setText(("Your turn" if board.turn==self.player_color else "Stockfish to move")+" · "+("White" if board.turn else "Black"))
+            self._render_history(); self._sync_board(); self._update_opening(); self.statusBar().showMessage(f"Imported {len(moves)} plies{warning}")
+        except Exception as exc:
+            message="This file is not valid UTF-8 text." if isinstance(exc,UnicodeDecodeError) else str(exc)
+            QMessageBox.critical(self,"Import failed",message)
     def export_pgn(self):
         if not self.history and not self.game_result_override:QMessageBox.information(self,"Export PGN","There are no moves to export."); return
         path,_=QFileDialog.getSaveFileName(self,"Export PGN",str(APP_DIR/"game.pgn"),"PGN files (*.pgn)")
@@ -1675,7 +1710,7 @@ class ChessWindow(QMainWindow):
         except Exception as exc:QMessageBox.critical(self,"Export failed",str(exc))
     def flip_board(self):self.board_widget.flipped=not self.board_widget.flipped; self.board_widget.update()
     def _update_opening(self):
-        result=detect_opening(self.history,self.openings); self.opening_label.setText(result)
+        result=detect_opening(self.history,self.openings,self.opening_position_index); self.opening_label.setText(result)
         if not self.review_moves:self.coach_opening.setText("Opening: "+result)
     def set_sound(self,on):self.sound_enabled=on
     def _play_sound(self,name):

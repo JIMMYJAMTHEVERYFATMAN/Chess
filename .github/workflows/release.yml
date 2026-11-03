@@ -173,6 +173,13 @@ jobs:
           4. Select downloaded games and choose **Review selected** or **Review all unreviewed** to run local Stockfish analysis. In **Castling timing and results**, **Quick scan** reads saved PGNs without a full review; select a castling row to filter the game list to matching games.
           5. In **Profile → Overview**, choose board and piece styles. Opening data and profile files are stored locally under `%LOCALAPPDATA%\OfflineChess`.
           '@ | Set-Content -LiteralPath $notesPath -Encoding utf8
+          $changelog = Get-Content -LiteralPath "CHANGELOG.md" -Raw
+          $heading = [regex]::Escape("## [v$($env:RELEASE_TAG.Substring(1))]")
+          $section = [regex]::Match($changelog, "(?ms)^$heading[^\r\n]*\r?\n(.*?)(?=^## |\z)")
+          if (-not $section.Success) {
+            throw "CHANGELOG.md has no section for $env:RELEASE_TAG"
+          }
+          Add-Content -LiteralPath $notesPath -Value "`r`n## What's changed`r`n`r`n$($section.Groups[1].Value.Trim())"
           $assets = @(
             "dist/OfflineChess.exe",
             "dist/OfflineChess.exe.sha256",

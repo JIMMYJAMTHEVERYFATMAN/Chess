@@ -757,6 +757,19 @@ class EngineWorker(QObject):
             if not self.engine:
                 raise RuntimeError("Stockfish has not started")
             budget = max(.05, min(15.0, float(budget)))
+            deadline = time.monotonic() + budget
+            color = source_board.turn
+            label = "White" if color == chess.WHITE else "Black"
+            position = source_board.copy(stack=False)
+            legal_moves = list(position.legal_moves)
+            if not legal_moves:
+                results[label] = []
+                self.position_analysis_done.emit({"token": token, "fen": fen, "color": color,
+                                                  "results": results, "error": ""})
+                return
+            if "MultiPV" not in self.option_names:
+                raise RuntimeError("This Stockfish build cannot return three candidates in one search.")
+
             full_strength = {}
             if "UCI_LimitStrength" in self.option_names:
                 full_strength["UCI_LimitStrength"] = False
@@ -774,74 +787,66 @@ class EngineWorker(QObject):
             if full_strength:
                 self.engine.configure(full_strength)
 
-            for color, label in ((chess.WHITE, "White"), (chess.BLACK, "Black")):
-                position = source_board.copy(stack=False)
-                position.turn = color
-                legal_moves = list(position.legal_moves)
-                if not legal_moves:
-                    results[label] = []
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("The selected analysis time expired before Stockfish could start.")
+            multipv = min(3, len(legal_moves), max(1, self._multipv_max))
+            # Leave room for UCI stop/response overhead so the requested wall
+            # clock budget stays a hard cap around Stockfish's search.
+            search_budget = max(.01, remaining - min(.05, remaining * .05))
+            with self.engine.analysis(
+                    position, chess.engine.Limit(time=search_budget), multipv=multipv) as analysis:
+                def stop_at_deadline():
+                    try:
+                        analysis.stop()
+                    except Exception:
+                        # The search may have ended or the engine may have exited already.
+                        pass
+
+                stop_timer = threading.Timer(max(0, deadline - time.monotonic()), stop_at_deadline)
+                stop_timer.daemon = True
+                stop_timer.start()
+                try:
+                    analysis.wait()
+                finally:
+                    stop_timer.cancel()
+                candidate_lines = analysis.multipv
+                if isinstance(candidate_lines, dict):
+                    candidate_lines = [candidate_lines]
+
+            rows = []
+            for line in candidate_lines[:3]:
+                pv = line.get("pv", [])
+                if not pv or pv[0] not in legal_moves:
                     continue
-
-                candidate_lines = []
-                multipv = min(3, self._multipv_max)
-                if "MultiPV" in self.option_names and multipv > 1:
-                    analyzed = self.engine.analyse(
-                        position, chess.engine.Limit(time=budget), multipv=multipv)
-                    candidate_lines.extend(analyzed if isinstance(analyzed, list) else [analyzed])
-
-                seen = {
-                    line.get("pv", [None])[0]
-                    for line in candidate_lines
-                    if line.get("pv") and line.get("pv")[0] in position.legal_moves
-                }
-                # Stockfish normally supports MultiPV >= 3. If it does not, or
-                # returns fewer usable lines than requested, ask for the next
-                # best move while excluding candidates already found.
-                while len(seen) < min(3, len(legal_moves)):
-                    remaining = [move for move in legal_moves if move not in seen]
-                    if not remaining:
+                move = pv[0]
+                if any(row["move"] == move for row in rows):
+                    continue
+                side_score = line["score"].pov(color)
+                mate = side_score.mate()
+                if mate is not None:
+                    score_text = (f"+M{mate}" if mate > 0 else
+                                  f"−M{abs(mate)}" if mate < 0 else "M0")
+                else:
+                    score_text = eval_text(int(side_score.score() or 0))
+                pv_board = position.copy(stack=False)
+                san_line = []
+                for pv_move in pv[:8]:
+                    if pv_move not in pv_board.legal_moves:
                         break
-                    info = self.engine.analyse(
-                        position, chess.engine.Limit(time=budget), root_moves=remaining)
-                    pv = info.get("pv", [])
-                    if not pv or pv[0] not in remaining:
-                        break
-                    seen.add(pv[0])
-                    candidate_lines.append(info)
-
-                rows = []
-                for line in candidate_lines:
-                    pv = line.get("pv", [])
-                    if not pv or pv[0] not in position.legal_moves:
-                        continue
-                    move = pv[0]
-                    if any(row["move"] == move for row in rows):
-                        continue
-                    side_score = line["score"].pov(color)
-                    mate = side_score.mate()
-                    if mate is not None:
-                        score_text = (f"+M{mate}" if mate > 0 else
-                                      f"−M{abs(mate)}" if mate < 0 else "M0")
-                    else:
-                        score_text = eval_text(int(side_score.score() or 0))
-                    pv_board = position.copy(stack=False)
-                    san_line = []
-                    for pv_move in pv[:8]:
-                        if pv_move not in pv_board.legal_moves:
-                            break
-                        san_line.append(pv_board.san(pv_move))
-                        pv_board.push(pv_move)
-                    rows.append({
-                        "move": move,
-                        "san": position.san(move),
-                        "eval": score_text,
-                        "pv": " ".join(san_line),
-                        "pv_uci": [pv_move.uci() for pv_move in pv[:8]],
-                        "score": side_score.score(mate_score=100_000),
-                    })
-                rows.sort(key=lambda row: row["score"] if row["score"] is not None else -100_001,
-                          reverse=True)
-                results[label] = rows[:3]
+                    san_line.append(pv_board.san(pv_move))
+                    pv_board.push(pv_move)
+                rows.append({
+                    "move": move,
+                    "san": position.san(move),
+                    "eval": score_text,
+                    "pv": " ".join(san_line),
+                    "pv_uci": [pv_move.uci() for pv_move in pv[:8]],
+                    "score": side_score.score(mate_score=100_000),
+                })
+            rows.sort(key=lambda row: row["score"] if row["score"] is not None else -100_001,
+                      reverse=True)
+            results[label] = rows[:3]
         except Exception as exc:
             error = str(exc) or "Stockfish could not analyze this position."
         finally:
@@ -853,6 +858,7 @@ class EngineWorker(QObject):
         self.position_analysis_done.emit({
             "token": token,
             "fen": fen,
+            "color": source_board.turn,
             "results": results,
             "error": error,
         })
