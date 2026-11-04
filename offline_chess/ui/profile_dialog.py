@@ -32,7 +32,8 @@ from .review_dialogs import *
 from .theme import *
 
 class ProfileDialog(QDialog):
-    def __init__(self,store,open_game_callback,theme_changed_callback=None,presentation_changed_callback=None,parent=None):
+    def __init__(self,store,open_game_callback,theme_changed_callback=None,presentation_changed_callback=None,parent=None,
+                 sound_changed_callback=None,load_opening_callback=None,load_book_callback=None):
         super().__init__(parent);self.store=store;self.open_game_callback=open_game_callback;self.theme_changed_callback=theme_changed_callback;self.presentation_changed_callback=presentation_changed_callback
         self.setWindowTitle("Player Profile · Offline Chess");fit_dialog_to_screen(self,parent,1600,1150)
         root_layout=QVBoxLayout(self);self.tabs=QTabWidget();root_layout.addWidget(self.tabs)
@@ -80,31 +81,97 @@ class ProfileDialog(QDialog):
         self.open_btn=QPushButton("Open saved game");self.open_btn.clicked.connect(self.open_selected);settings.addWidget(self.open_btn)
         self.delete_selected_btn=QPushButton("Delete selected game");self.delete_selected_btn.clicked.connect(self.delete_selected);settings.addWidget(self.delete_selected_btn)
         self.clear_btn=QPushButton("Delete stored PGNs");self.clear_btn.clicked.connect(self.clear_pgn_data);settings.addWidget(self.clear_btn);layout.addLayout(settings)
-        self.clear_all_btn=QPushButton("Delete all profile data");self.clear_all_btn.clicked.connect(self.clear_all_data);layout.addWidget(self.clear_all_btn)
-        reporting_row=QHBoxLayout()
-        self.usage_reporting_toggle=QCheckBox("Share app check-ins (install ID, version, last seen, Chess.com username)")
-        self.usage_reporting_toggle.setChecked(store.get_setting("usage_reporting_enabled","1")=="1")
-        self.usage_reporting_toggle.toggled.connect(self._set_usage_reporting)
-        reporting_row.addWidget(self.usage_reporting_toggle,1)
-        self.feedback_button=QPushButton("Send feedback")
-        self.feedback_button.setToolTip("Send a bug report or feature suggestion with your app version and install ID.")
-        self.feedback_button.clicked.connect(self._send_feedback)
-        reporting_row.addWidget(self.feedback_button);layout.addLayout(reporting_row)
-        self.feedback_note=QLabel("Check-ins are on by default and sent at launch with the update check. Turn them off here. Feedback includes your message, app version, install ID, and saved Chess.com username. The service provider may process network connection details; the encrypted event files contain no IP address or game data.")
-        self.feedback_note.setObjectName("Muted");self.feedback_note.setWordWrap(True);layout.addWidget(self.feedback_note)
+        self._build_settings_page(sound_changed_callback,load_opening_callback,load_book_callback)
         self._build_chesscom_page()
         self.tabs.currentChanged.connect(self._load_chesscom_on_tab)
         self.refresh()
 
+    def _build_settings_page(self,sound_changed_callback,load_opening_callback,load_book_callback):
+        scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setFrameShape(QFrame.Shape.NoFrame)
+        page=QWidget();layout=QVBoxLayout(page);layout.setContentsMargins(20,18,20,18);layout.setSpacing(14)
+        title=QLabel("SETTINGS");title.setObjectName("SectionTitle");layout.addWidget(title)
+
+        audio_title=QLabel("GAMEPLAY");audio_title.setObjectName("SectionTitle");layout.addWidget(audio_title)
+        self.sound_toggle=QCheckBox("Sound effects")
+        self.sound_toggle.setChecked(self.store.get_setting("sound_effects_enabled","1")=="1")
+        self.sound_toggle.toggled.connect(lambda enabled:self._set_sound(enabled,sound_changed_callback))
+        layout.addWidget(self.sound_toggle)
+        sound_note=QLabel("Play short sound cues for moves, captures, checks, castling, and game results.")
+        sound_note.setObjectName("Muted");sound_note.setWordWrap(True);layout.addWidget(sound_note)
+
+        database_title=QLabel("LOCAL DATABASES");database_title.setObjectName("SectionTitle");layout.addWidget(database_title)
+        database_row=QHBoxLayout()
+        self.load_openings_btn=QPushButton("Load Lichess DB")
+        self.load_openings_btn.setToolTip("Choose the Lichess opening TSV files to use for local opening names and analysis.")
+        self.load_openings_btn.setEnabled(load_opening_callback is not None)
+        self.load_openings_btn.clicked.connect(lambda:self._run_database_loader(load_opening_callback))
+        database_row.addWidget(self.load_openings_btn)
+        self.load_book_btn=QPushButton("Load weighted book")
+        self.load_book_btn.setToolTip("Choose a local Polyglot .bin book for opening suggestions and review context.")
+        self.load_book_btn.setEnabled(load_book_callback is not None)
+        current_book=getattr(self.parent(),"book_path",None)
+        if current_book:
+            self.load_book_btn.setText("Weighted book loaded")
+            self.load_book_btn.setToolTip(f"Loaded weighted opening book: {Path(current_book).name}")
+        self.load_book_btn.clicked.connect(lambda:self._load_weighted_book(load_book_callback))
+        database_row.addWidget(self.load_book_btn);database_row.addStretch();layout.addLayout(database_row)
+
+        feedback_title=QLabel("FEEDBACK");feedback_title.setObjectName("SectionTitle");layout.addWidget(feedback_title)
+        feedback_row=QHBoxLayout()
+        self.report_bug_btn=QPushButton("Report a bug")
+        self.report_bug_btn.setObjectName("FeedbackButton")
+        self.report_bug_btn.setToolTip("Send a bug report to the app maintainer.")
+        self.report_bug_btn.clicked.connect(lambda:self._send_feedback("bug"));feedback_row.addWidget(self.report_bug_btn)
+        self.suggest_feature_btn=QPushButton("Suggest a feature")
+        self.suggest_feature_btn.setObjectName("FeedbackButton")
+        self.suggest_feature_btn.setToolTip("Send a feature suggestion to the app maintainer.")
+        self.suggest_feature_btn.clicked.connect(lambda:self._send_feedback("feature"));feedback_row.addWidget(self.suggest_feature_btn)
+        feedback_row.addStretch();layout.addLayout(feedback_row)
+        self.feedback_status=QLabel("");self.feedback_status.setObjectName("Muted");self.feedback_status.setWordWrap(True);layout.addWidget(self.feedback_status)
+
+        privacy_title=QLabel("DATA SHARING & PRIVACY");privacy_title.setObjectName("SectionTitle");layout.addWidget(privacy_title)
+        self.usage_reporting_toggle=QCheckBox("Share usage check-ins with update checks")
+        self.usage_reporting_toggle.setChecked(self.store.get_setting("usage_reporting_enabled","1")=="1")
+        self.usage_reporting_toggle.toggled.connect(self._set_usage_reporting)
+        layout.addWidget(self.usage_reporting_toggle)
+        self.feedback_note=QLabel("When enabled, a check-in is sent at launch alongside the update check. It contains a random install ID, app version, last-seen time, and saved Chess.com username. This setting applies to check-ins that have not started; an in-progress check-in cannot be recalled. Automatic update checks still run when sharing is off. Bug reports and feature suggestions are sent only when you submit them, and include your message, app version, install ID, and saved Chess.com username. Game PGNs are not attached. The service provider may process network connection details.")
+        self.feedback_note.setObjectName("Muted");self.feedback_note.setWordWrap(True);layout.addWidget(self.feedback_note)
+
+        wipe_title=QLabel("DELETE SAVED GAME DATA");wipe_title.setObjectName("SectionTitle");layout.addWidget(wipe_title)
+        self.clear_all_btn=QPushButton("Delete all saved game data")
+        self.clear_all_btn.setToolTip("Remove saved game summaries, reviews, downloaded Chess.com games, and their local PGN files.")
+        self.clear_all_btn.clicked.connect(self.clear_all_data);layout.addWidget(self.clear_all_btn)
+        wipe_note=QLabel("After confirmation, this removes local game summaries, reviews, downloaded Chess.com game records and PGNs, plus the puzzle challenge high score. App preferences and the saved Chess.com username remain.")
+        wipe_note.setObjectName("Muted");wipe_note.setWordWrap(True);layout.addWidget(wipe_note)
+        layout.addStretch(1)
+        scroll.setWidget(page);self.settings_scroll=scroll;self.tabs.addTab(scroll,"Settings")
+
+    def _set_sound(self,enabled,callback):
+        if callback:
+            callback(enabled)
+        else:
+            self.store.set_setting("sound_effects_enabled","1" if enabled else "0")
+
+    def _run_database_loader(self,callback):
+        if callback:callback(self)
+
+    def _load_weighted_book(self,callback):
+        if not callback:return
+        callback(self)
+        book_path=getattr(self.parent(),"book_path",None)
+        if book_path:
+            self.load_book_btn.setText("Weighted book loaded")
+            self.load_book_btn.setToolTip(f"Loaded weighted opening book: {Path(book_path).name}")
+
     def _set_usage_reporting(self,enabled):
         self.store.set_setting("usage_reporting_enabled","1" if enabled else "0")
 
-    def _send_feedback(self):
-        dialog=FeedbackDialog(self.store,None,self)
+    def _send_feedback(self,category):
+        dialog=FeedbackDialog(self.store,category,self)
 
         def update_note(ok,_error):
-            self.feedback_note.setText("Thanks. Your feedback was sent to the maintainer dashboard."
-                                       if ok else "The feedback could not be sent. Your message remains in the form for retry.")
+            self.feedback_status.setText("Thanks. Your feedback was sent to the maintainer dashboard."
+                                         if ok else "The feedback could not be sent. Your message remains in the form for retry.")
 
         dialog.completed.connect(update_note)
         dialog.exec()
@@ -1439,7 +1506,7 @@ class ProfileDialog(QDialog):
         if answer==QMessageBox.StandardButton.Yes:self.store.delete_game(game["game_key"]);self.refresh()
 
     def clear_all_data(self):
-        answer=QMessageBox.question(self,"Delete all profile data?","Permanently delete every saved game summary and PGN from this computer?",QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.Cancel,QMessageBox.StandardButton.Cancel)
+        answer=QMessageBox.question(self,"Delete all saved game data?","Permanently delete local game summaries, reviews, downloaded Chess.com game records and PGN files, plus the puzzle challenge high score? App preferences and your saved Chess.com username will remain.",QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.Cancel,QMessageBox.StandardButton.Cancel)
         if answer==QMessageBox.StandardButton.Yes:
             self.store.clear_all();self.refresh();self.refresh_chesscom_library(self.chesscom_username.text())
 

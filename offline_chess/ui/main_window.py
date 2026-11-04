@@ -118,6 +118,9 @@ class ChessWindow(QMainWindow):
         self.rating_eligible=True
         try:self.profile_store=ProfileStore();self.profile_error=None
         except Exception as exc:self.profile_store=None;self.profile_error=str(exc)
+        if self.profile_store:
+            try:self.sound_enabled=self.profile_store.get_setting("sound_effects_enabled","1")=="1"
+            except Exception:pass
         self._saved_game_stats_cache=None
         self.syzygy_path="";self.syzygy_active=False;self.syzygy_supported=False;self.syzygy_error=""
         if self.profile_store:
@@ -157,7 +160,7 @@ class ChessWindow(QMainWindow):
                 "It sends a random install ID, app version, last-seen time, and your saved Chess.com username. "
                 "It does not send games, PGNs, moves, or your computer name. The app database does not store IP addresses, "
                 "though the hosting provider may process network connection details. You can turn reporting off in "
-                "Profile → Overview at any time. Continue with reporting enabled?",
+                "Profile → Settings at any time. Continue with reporting enabled?",
                 QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.Yes)
             store.set_setting("usage_disclosure_seen","1")
@@ -261,11 +264,7 @@ class ChessWindow(QMainWindow):
         top.addStretch()
         self.opening_label=QLabel("Opening database not loaded"); self.opening_label.setObjectName("OpeningPill"); top.addWidget(self.opening_label)
         top.addSpacing(12)
-        self.openings_btn=QPushButton("Load Lichess DB"); self.openings_btn.clicked.connect(self.load_opening_dialog); top.addWidget(self.openings_btn)
-        self.book_btn=QPushButton("Load weighted book"); self.book_btn.clicked.connect(self.load_book_dialog); top.addWidget(self.book_btn)
         self.profile_btn=QPushButton("Profile"); self.profile_btn.clicked.connect(self.open_profile); top.addWidget(self.profile_btn)
-        self.report_bug_btn=QPushButton("Report bug");self.report_bug_btn.setObjectName("FeedbackButton");self.report_bug_btn.setToolTip("Send a bug report to the maintainer dashboard.");self.report_bug_btn.clicked.connect(lambda:self.open_feedback("bug"));top.addWidget(self.report_bug_btn)
-        self.suggest_feature_btn=QPushButton("Suggest feature");self.suggest_feature_btn.setObjectName("FeedbackButton");self.suggest_feature_btn.setToolTip("Send a feature suggestion to the maintainer dashboard.");self.suggest_feature_btn.clicked.connect(lambda:self.open_feedback("feature"));top.addWidget(self.suggest_feature_btn)
         self.fullscreen_btn=QPushButton("Exit fullscreen");self.fullscreen_btn.setToolTip("F11 toggles full screen · Esc returns to windowed mode");self.fullscreen_btn.clicked.connect(self.toggle_fullscreen);top.addWidget(self.fullscreen_btn)
 
         self.main_tabs=QTabWidget();self.main_tabs.setObjectName("MainTabs");root.addWidget(self.main_tabs,1)
@@ -313,7 +312,7 @@ class ChessWindow(QMainWindow):
         elo_row=QHBoxLayout();elo_title=QLabel("Opponent strength");elo_title.setObjectName("PlayerName");self.elo_value=QLabel("1320");self.elo_value.setObjectName("AccentText");elo_row.addWidget(elo_title);elo_row.addStretch();elo_row.addWidget(self.elo_value);setup_col.addLayout(elo_row)
         self.elo_slider=QSlider(Qt.Orientation.Horizontal);self.elo_slider.setRange(MIN_TARGET_ELO,MAX_ELO);self.elo_slider.setValue(MIN_ELO);self.elo_slider.setSingleStep(10);self.elo_slider.setToolTip("Below Stockfish's 1320 UCI minimum, weaker moves are selected to approximate the requested strength.");self.elo_slider.valueChanged.connect(self.change_elo);setup_col.addWidget(self.elo_slider)
         elo_marks=QHBoxLayout();elo_marks.addWidget(self._small("400 · approximate"));elo_marks.addStretch();elo_marks.addWidget(self._small("2200"));elo_marks.addStretch();elo_marks.addWidget(self._small("3190"));setup_col.addLayout(elo_marks)
-        foot=QHBoxLayout();self.sound_toggle=QCheckBox("Sound effects");self.sound_toggle.setChecked(True);self.sound_toggle.toggled.connect(self.set_sound);foot.addWidget(self.sound_toggle);foot.addStretch();self.flip_btn=self._button("Flip board","secondary");self.flip_btn.clicked.connect(self.flip_board);foot.addWidget(self.flip_btn);setup_col.addLayout(foot);play_col.addWidget(setup)
+        foot=QHBoxLayout();foot.addStretch();self.flip_btn=self._button("Flip board","secondary");self.flip_btn.clicked.connect(self.flip_board);foot.addWidget(self.flip_btn);setup_col.addLayout(foot);play_col.addWidget(setup)
         self.mode_stack.addWidget(play_page)
 
         review_page=QWidget();review_col=QVBoxLayout(review_page);review_col.setContentsMargins(0,0,0,0);review_col.setSpacing(12)
@@ -514,8 +513,8 @@ class ChessWindow(QMainWindow):
                 if key not in seen:seen.add(key);candidates.append(path)
         if candidates: self._load_paths_async(candidates)
 
-    def load_opening_dialog(self):
-        folder=QFileDialog.getExistingDirectory(self,"Choose the Lichess chess-openings folder",str(APP_DIR))
+    def load_opening_dialog(self,dialog_parent=None):
+        folder=QFileDialog.getExistingDirectory(dialog_parent or self,"Choose the Lichess chess-openings folder",str(APP_DIR))
         if not folder: return
         paths=discover_lichess_files(Path(folder))
         if not paths:
@@ -542,18 +541,17 @@ class ChessWindow(QMainWindow):
         if paths and not entries:
             QMessageBox.warning(self,"No openings loaded","The selected TSV files were found, but no valid opening lines could be read.")
         self._update_opening()
-        if hasattr(self,"chesscom_opening_mastery"):
-            self.refresh_chesscom_library(self.chesscom_username.text())
+        for widget in QApplication.topLevelWidgets():
+            if isinstance(widget,ProfileDialog):
+                widget.refresh_chesscom_library(widget.chesscom_username.text())
 
-    def load_book_dialog(self):
-        path,_=QFileDialog.getOpenFileName(self,"Load a weighted Polyglot opening book",str(APP_DIR),"Polyglot books (*.bin)")
+    def load_book_dialog(self,dialog_parent=None):
+        path,_=QFileDialog.getOpenFileName(dialog_parent or self,"Load a weighted Polyglot opening book",str(APP_DIR),"Polyglot books (*.bin)")
         if not path:return
         try:
             with chess.polyglot.open_reader(path):
                 pass
             self.book_path=path
-            self.book_btn.setText(f"Book: {Path(path).name}")
-            self.book_btn.setToolTip("Weighted offline book loaded. Book moves and response frequencies will appear in reviews and Explore.")
             self.statusBar().showMessage(f"Loaded weighted book · {Path(path).name}",6000)
         except Exception as exc:
             QMessageBox.warning(self,"Could not load opening book",f"Choose a valid Polyglot .bin opening book.\n\n{exc}")
@@ -1540,7 +1538,10 @@ class ChessWindow(QMainWindow):
     def open_profile(self):
         if not self.profile_store:
             QMessageBox.warning(self,"Profile unavailable",f"Could not open local profile storage.\n\n{self.profile_error or ''}");return
-        dialog=ProfileDialog(self.profile_store,self.open_saved_game,self.set_board_theme,self.set_board_presentation,self);dialog.setStyleSheet(self._stylesheet());dialog.exec();self._saved_game_stats_cache=None
+        dialog=ProfileDialog(self.profile_store,self.open_saved_game,self.set_board_theme,self.set_board_presentation,self,
+                             sound_changed_callback=self.set_sound,load_opening_callback=self.load_opening_dialog,
+                             load_book_callback=self.load_book_dialog)
+        dialog.setStyleSheet(self._stylesheet());dialog.exec();self._saved_game_stats_cache=None
         self.puzzle_dialog.refresh_high_score()
 
     def set_board_theme(self,theme_key):
@@ -1720,7 +1721,11 @@ class ChessWindow(QMainWindow):
     def _update_opening(self):
         result=detect_opening(self.history,self.openings,self.opening_position_index); self.opening_label.setText(result)
         if not self.review_moves:self.coach_opening.setText("Opening: "+result)
-    def set_sound(self,on):self.sound_enabled=on
+    def set_sound(self,on):
+        self.sound_enabled=bool(on)
+        if self.profile_store:
+            try:self.profile_store.set_setting("sound_effects_enabled","1" if on else "0")
+            except Exception as exc:self.statusBar().showMessage(f"Sound setting could not be saved: {exc}",8000)
     def _play_sound(self,name):
         if not self.sound_enabled:return
         path=BUNDLE_DIR/"assets"/f"{name}.wav"

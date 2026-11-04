@@ -897,7 +897,8 @@ class ReviewAnalysisTests(unittest.TestCase):
                 store=ProfileStore()
                 opened=[]
                 dialog=ProfileDialog(store,opened.append)
-                self.assertEqual(dialog.tabs.tabText(1),"Chess.com")
+                self.assertEqual(dialog.tabs.tabText(1),"Settings")
+                self.assertEqual(dialog.tabs.tabText(2),"Chess.com")
                 self.assertGreaterEqual(len(BOARD_THEMES),12)
                 self.assertGreaterEqual(len(PIECE_STYLES),5)
                 self.assertIn("nordic",[dialog.theme_choice.itemData(i) for i in range(dialog.theme_choice.count())])
@@ -957,6 +958,35 @@ class ReviewAnalysisTests(unittest.TestCase):
             finally:
                 if previous is None:os.environ.pop("LOCALAPPDATA",None)
                 else:os.environ["LOCALAPPDATA"]=previous
+
+    def test_profile_settings_controls_and_persisted_preferences(self):
+        app=QApplication.instance() or QApplication([])
+        previous=os.environ.get("LOCALAPPDATA")
+        with tempfile.TemporaryDirectory(dir=os.getcwd()) as data_dir:
+            with patch.dict(os.environ,{"LOCALAPPDATA":data_dir,"XDG_DATA_HOME":data_dir}):
+                store=ProfileStore();calls=[]
+                def save_sound(enabled):
+                    calls.append(("sound",enabled))
+                    store.set_setting("sound_effects_enabled","1" if enabled else "0")
+                dialog=ProfileDialog(store,lambda _game:None,sound_changed_callback=save_sound,
+                                     load_opening_callback=lambda _parent:calls.append(("openings",True)),
+                                     load_book_callback=lambda _parent:calls.append(("book",True)))
+                self.assertEqual(dialog.tabs.tabText(dialog.tabs.indexOf(dialog.settings_scroll)),"Settings")
+                self.assertEqual(dialog.store.get_setting("sound_effects_enabled","1"),"1")
+                dialog.sound_toggle.setChecked(False)
+                self.assertEqual(store.get_setting("sound_effects_enabled"),"0")
+                dialog.usage_reporting_toggle.setChecked(False)
+                self.assertEqual(store.get_setting("usage_reporting_enabled"),"0")
+                dialog.usage_reporting_toggle.setChecked(True)
+                self.assertEqual(store.get_setting("usage_reporting_enabled"),"1")
+                dialog.load_openings_btn.click();dialog.load_book_btn.click()
+                self.assertEqual(calls,[ ("sound",False), ("openings",True), ("book",True) ])
+                buttons={button.text() for button in dialog.settings_scroll.findChildren(QPushButton)}
+                self.assertTrue({"Report a bug","Suggest a feature","Delete all saved game data"}.issubset(buttons))
+                self.assertIn("check-ins that have not started",dialog.feedback_note.text())
+                dialog.close();dialog.deleteLater();app.processEvents()
+        if previous is None:os.environ.pop("LOCALAPPDATA",None)
+        else:os.environ["LOCALAPPDATA"]=previous
 
     def test_chesscom_initial_load_clears_loading_status_without_clobbering_operation_status(self):
         app=QApplication.instance() or QApplication([])

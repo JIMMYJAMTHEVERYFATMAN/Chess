@@ -1,5 +1,28 @@
 # Changelog
 
+## [v1.1.4.1] - 2026-11-04
+
+### Added
+
+- Profile → Settings centralizes persistent sound effects, Lichess and weighted-book loading, bug reports and feature suggestions, usage check-in sharing, and deletion of saved game data.
+
+### Changed
+
+- Sound preference is saved locally. Database and feedback controls moved from the main toolbar/game controls into Profile → Settings.
+- The update version parser accepts an optional fourth hotfix component so three-part installations can recognize a release such as v1.1.4.1.
+- Users on v1.1.4 must download and replace the EXE manually for this hotfix; that build cannot recognize a four-part tag or run its updater helper correctly.
+
+### Fixed
+
+- The Windows update helper no longer launches PowerShell with `DETACHED_PROCESS`, which caused it to exit without running the encoded replacement script. The downloaded application can now replace the old executable and restart.
+- Loaded Lichess opening data refreshes the Chess.com opening insights in an open profile.
+
+### Verification
+
+- All 152 local tests pass with loopback access enabled for dashboard tests.
+- A Windows process-launch probe reproduced the updater failure with `DETACHED_PROCESS` and confirmed the hidden, non-detached PowerShell command executes.
+- A Windows PyInstaller 6.22.3 one-file build completed successfully with Python 3.14.4 (135,013,308 bytes).
+
 ## [v1.1.4] - 2026-11-04
 
 ### Fixed

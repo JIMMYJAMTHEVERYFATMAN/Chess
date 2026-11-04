@@ -38,9 +38,12 @@ from offline_chess.ui.profile_dialog import ProfileDialog
 
 class UpdateHardeningTests(unittest.TestCase):
     def test_version_parser_handles_tags_and_rejects_non_semver(self):
-        self.assertEqual(app_updater._version_tuple("v1.0.0"), (1, 0, 0))
-        self.assertEqual(app_updater._version_tuple("0.10.5"), (0, 10, 5))
-        for invalid in ("", "1.0", "v1.0.0-rc1", "latest", "1.0.0/../x"):
+        self.assertEqual(app_updater._version_tuple("v1.0.0"), (1, 0, 0, 0))
+        self.assertEqual(app_updater._version_tuple("0.10.5"), (0, 10, 5, 0))
+        self.assertEqual(app_updater._version_tuple("v1.1.4.1"), (1, 1, 4, 1))
+        self.assertGreater(app_updater._version_tuple("1.1.4.1"), app_updater._version_tuple("1.1.4"))
+        self.assertLess(app_updater._version_tuple("1.1.4.1"), app_updater._version_tuple("1.1.5"))
+        for invalid in ("", "1.0", "1.1.4.1.1", "v1.0.0-rc1", "latest", "1.0.0/../x"):
             with self.subTest(version=invalid):
                 self.assertIsNone(app_updater._version_tuple(invalid))
 
@@ -89,6 +92,18 @@ class UpdateHardeningTests(unittest.TestCase):
         self.assertEqual(len(found), 1)
         self.assertEqual(found[0]["_exe_url"], "https://github.com/a/app.exe")
         self.assertEqual(found[0]["_checksum_url"], "https://github.com/a/app.exe.sha256")
+
+    def test_existing_three_part_install_detects_four_part_hotfix_release(self):
+        release = {"tag_name": "v1.1.4.1", "assets": [
+            {"name": "OfflineChess.exe", "browser_download_url": "https://github.com/a/app.exe"},
+            {"name": "OfflineChess.exe.sha256", "browser_download_url": "https://github.com/a/app.exe.sha256"},
+        ]}
+        response=MagicMock();response.__enter__.return_value=response
+        response.read.return_value=json.dumps(release).encode("utf-8")
+        worker=app_updater.UpdateCheckWorker("1.1.4")
+        found=[];worker.update_available.connect(found.append)
+        with patch.object(app_updater,"_request",return_value=response):worker.run()
+        self.assertEqual([item["tag_name"] for item in found],["v1.1.4.1"])
 
     def test_download_worker_verifies_checksum_and_reports_progress(self):
         payload = b"verified executable payload"
@@ -160,6 +175,7 @@ class UpdateHardeningTests(unittest.TestCase):
 
             def capture(args, **kwargs):
                 captured["args"] = args
+                captured["kwargs"] = kwargs
 
             with patch.object(app_updater.subprocess, "Popen", side_effect=capture):
                 app_updater.launch_windows_update(source, target)
@@ -171,6 +187,9 @@ class UpdateHardeningTests(unittest.TestCase):
             self.assertIn("$backup = $target + '.previous'", script)
             self.assertIn("WaitForInputIdle(15000)", script)
             self.assertIn("Reopened the existing app after update failure", script)
+            flags=captured["kwargs"]["creationflags"]
+            self.assertTrue(flags & app_updater.subprocess.CREATE_NO_WINDOW)
+            self.assertFalse(flags & app_updater.subprocess.DETACHED_PROCESS)
 
     @unittest.skipUnless(os.name == "nt", "PowerShell updater helper is Windows-only")
     def test_update_helper_swaps_and_reopens_or_restores_the_previous_executable(self):

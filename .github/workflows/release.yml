@@ -31,7 +31,7 @@ jobs:
         shell: pwsh
         run: |
           $source = Get-Content offline_chess/config.py -Raw
-          $versionMatch = [regex]::Match($source, '(?m)^APP_VERSION = "([0-9]+\.[0-9]+\.[0-9]+)"\r?$')
+          $versionMatch = [regex]::Match($source, '(?m)^APP_VERSION = "([0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?)"\r?$')
           if (-not $versionMatch.Success) {
             throw "Could not read APP_VERSION from offline_chess/config.py"
           }
@@ -163,7 +163,7 @@ jobs:
 
           Offline Chess is licensed under GNU GPL v3 only. The `OfflineChess-licenses.zip` asset contains the license and third-party notices. This release also provides the matching Stockfish 19 source archive and the NNUE network embedded in the Stockfish binary. The repository's source archive at this release tag contains the Offline Chess source and build instructions.
 
-          The app shows a first-run usage-reporting disclosure. Check-ins are on by default and can be disabled in Profile → Overview. Check-ins contain an install ID, app version, last-seen timestamp, and saved Chess.com username. Bug reports and feature suggestions are sent only when submitted in the app.
+          The app shows a first-run usage-reporting disclosure. Check-ins are on by default and can be disabled in Profile → Settings. Check-ins contain an install ID, app version, last-seen timestamp, and saved Chess.com username. Bug reports and feature suggestions are sent only when submitted in the app.
 
           ## How to use
 
@@ -171,7 +171,7 @@ jobs:
           2. To inspect a completed game, open its review. Step through moves with the move list or navigation controls and use the review and coaching tabs to inspect analysis.
           3. For Chess.com games, open **Profile → Chess.com**, enter your username, and select **Find archives**. Use **Download all months** for the initial import. For later additions, choose **Update downloaded games**; it checks recent archive months and adds games that are not already saved.
           4. Select downloaded games and choose **Review selected** or **Review all unreviewed** to run local Stockfish analysis. In **Castling timing and results**, **Quick scan** reads saved PGNs without a full review; select a castling row to filter the game list to matching games.
-          5. In **Profile → Overview**, choose board and piece styles. Opening data and profile files are stored locally under `%LOCALAPPDATA%\OfflineChess`.
+          5. In **Profile → Overview**, choose board and piece styles. In **Profile → Settings**, manage sound, local opening databases, feedback, check-in sharing, and saved game data. Opening data and profile files are stored locally under `%LOCALAPPDATA%\OfflineChess`.
           '@ | Set-Content -LiteralPath $notesPath -Encoding utf8
           $changelog = Get-Content -LiteralPath "CHANGELOG.md" -Raw
           $heading = [regex]::Escape("## [v$($env:RELEASE_TAG.Substring(1))]")
@@ -224,7 +224,7 @@ jobs:
       - name: Check release version
         shell: bash
         run: |
-          version="$(sed -n 's/^APP_VERSION = "\([0-9.]*\)"$/\1/p' offline_chess/config.py | head -n1)"
+          version="$(sed -n 's/^APP_VERSION = "\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\(\.[0-9][0-9]*\)\{0,1\}\)"$/\1/p' offline_chess/config.py | head -n1)"
           if [[ -z "$version" ]]; then
             echo "Could not read APP_VERSION from offline_chess/config.py" >&2
             exit 1

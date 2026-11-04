@@ -1,6 +1,6 @@
 # Offline Chess
 
-A local chess analysis app built with PyQt6, `python-chess`, and Stockfish. Game records and PGNs stay on this computer. With reporting enabled, the app sends an installation check-in containing a random install ID, app version, last-seen time, and saved Chess.com username. You can turn check-ins off in **Profile → Overview**. Bug reports and feature suggestions are sent only when you submit them. Neither feature sends game history or PGNs.
+A local chess analysis app built with PyQt6, `python-chess`, and Stockfish. Game records and PGNs stay on this computer. With reporting enabled, the app sends an installation check-in containing a random install ID, app version, last-seen time, and saved Chess.com username. You can turn check-ins off in **Profile → Settings**. Bug reports and feature suggestions are sent only when you submit them. Neither feature sends game history or PGNs.
 
 The **Position Lab** tab accepts a FEN and shows Stockfish's top three candidate moves for the selected side to move, with evaluations and principal variations, within the selected time limit.
 
@@ -73,7 +73,7 @@ Opening names use the [Lichess chess-openings](https://github.com/lichess-org/ch
 
 Offline Chess source is licensed under GNU GPL v3 only; see [`LICENSE`](LICENSE). The direct dependencies and bundled data are described in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md), including the Lichess openings dataset's CC0 dedication and Stockfish's GPL license and source requirements. Windows releases include these notices and the matching Stockfish source/network files. The app's PyQt6 use means the project must remain under a GPL-compatible license unless a separate commercial PyQt license is obtained. These notices document the current build; they are not legal advice or a guarantee against legal claims.
 
-Reporting check-ins are on by default after a first-run disclosure and can be disabled at any time in **Profile → Overview**. The app database and encrypted event files contain no IP-address field, game record, or PGN telemetry. The hosting provider necessarily processes network connection information to serve public requests; the collector uses the connection address transiently for in-memory abuse limits and does not write it to the repository. Check-ins and feedback are encrypted by the collector with AES-256-GCM; event keys are wrapped to the dashboard owner's RSA public key before the encrypted files are written to a private Git repository. The local dashboard decrypts them with the matching private key and refreshes the repository on each page load. No retention or automatic deletion period is configured; delete records from the private repository when you want to remove them.
+Reporting check-ins are on by default after a first-run disclosure and can be disabled at any time in **Profile → Settings**. Disabling check-ins does not disable automatic update checks. The app database and encrypted event files contain no IP-address field, game record, or PGN telemetry. The hosting provider necessarily processes network connection information to serve public requests; the collector uses the connection address transiently for in-memory abuse limits and does not write it to the repository. Check-ins and feedback are encrypted by the collector with AES-256-GCM; event keys are wrapped to the dashboard owner's RSA public key before the encrypted files are written to a private Git repository. The local dashboard decrypts them with the matching private key and refreshes the repository on each page load. No retention or automatic deletion period is configured; delete records from the private repository when you want to remove them.
 
 ### Owner usage dashboard
 
@@ -84,6 +84,8 @@ For local dashboard access, install the dashboard dependency with `python -m pip
 ## Board appearance
 
 Choose the board and piece styles in **Profile → Overview**. Board themes include Classic Green, Walnut, Ocean Blue, Soft Violet, Slate, Mint, Crimson, Graphite, Desert, Nordic, Rose, High Contrast, and Monochrome. Piece styles include Tournament, Modern, Letters, Badge, and Bold. The selected styles are saved locally and apply to play, review, and opening boards.
+
+Use **Profile → Settings** to toggle and save sound effects, load Lichess opening TSV files or a weighted Polyglot book, submit a bug report or feature suggestion, change usage check-in sharing, or delete all locally saved game data. Deleting saved game data removes local game summaries, reviews, downloaded Chess.com games and PGNs, and the puzzle challenge high score; app preferences and the saved Chess.com username remain.
 
 ## Chess.com game review
 

@@ -22,11 +22,13 @@ LATEST_RELEASE_URL = f"https://api.github.com/repos/{REPOSITORY}/releases/latest
 APP_USER_AGENT = "OfflineChess-Updater"
 
 
-def _version_tuple(value: str) -> tuple[int, int, int] | None:
-    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", str(value).strip())
+def _version_tuple(value: str) -> tuple[int, int, int, int] | None:
+    """Parse three-part releases and optional fourth-component hotfix versions."""
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?", str(value).strip())
     if not match:
         return None
-    return tuple(int(part) for part in match.groups())
+    major,minor,patch,hotfix=match.groups()
+    return int(major),int(minor),int(patch),int(hotfix or 0)
 
 
 def _github_asset_url(asset: dict) -> str:
@@ -198,7 +200,9 @@ def launch_windows_update(downloaded_exe: str | Path, installed_exe: str | Path)
         "}",
     ))
     encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+    # DETACHED_PROCESS prevents Windows PowerShell from executing its encoded command
+    # in this launch mode. CREATE_NO_WINDOW keeps the helper silent while allowing it to run.
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     subprocess.Popen(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                       "-WindowStyle", "Hidden", "-EncodedCommand", encoded],
                      creationflags=flags, close_fds=True)
