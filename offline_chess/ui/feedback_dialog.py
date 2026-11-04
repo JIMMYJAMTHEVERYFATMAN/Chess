@@ -30,7 +30,7 @@ class FeedbackDialog(QDialog):
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
 
         layout = QVBoxLayout(self)
-        prompt = QLabel("Your message, app version, install ID, and saved Chess.com username go to the maintainer dashboard. Game PGNs are not attached. Limit: 5 messages per 24 hours, at least 60 seconds apart. Do not include sensitive information.")
+        prompt = QLabel("Your message, app version, install ID, and saved Chess.com username go to the maintainer dashboard. Discord receives only a count of new feedback submissions, not their contents. Game PGNs are not attached. Limit: 5 messages per 24 hours, at least 60 seconds apart. Do not include sensitive information.")
         prompt.setObjectName("Muted")
         prompt.setWordWrap(True)
         layout.addWidget(prompt)

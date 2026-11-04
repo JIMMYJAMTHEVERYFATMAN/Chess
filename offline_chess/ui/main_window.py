@@ -158,8 +158,9 @@ class ChessWindow(QMainWindow):
                 self,"Usage reporting is on by default",
                 "Offline Chess can send a check-in at launch alongside its automatic update check so its maintainer can see active installations. "
                 "It sends a random install ID, app version, last-seen time, and your saved Chess.com username. "
-                "It does not send games, PGNs, moves, or your computer name. The app database does not store IP addresses, "
-                "though the hosting provider may process network connection details. You can turn reporting off in "
+                "It does not send games, PGNs, moves, or your computer name. A count-only notice of new check-ins is sent to "
+                "the maintainer’s Discord without those details. The hosting provider may process network connection details. "
+                "You can turn reporting off in "
                 "Profile → Settings at any time. Continue with reporting enabled?",
                 QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.Yes)

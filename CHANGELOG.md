@@ -1,5 +1,15 @@
 # Changelog
 
+## [v1.1.4.2] - 2026-11-04
+
+### Added
+
+- Count-only Discord notifications for new installation check-ins and feedback submissions. Submitted text and identifying fields remain available only in the encrypted private telemetry store and local dashboard.
+
+### Changed
+
+- Updated the first-run reporting disclosure, feedback dialog, Profile settings, and README to describe the Discord notification metadata.
+
 ## [v1.1.4.1] - 2026-11-04
 
 ### Added
