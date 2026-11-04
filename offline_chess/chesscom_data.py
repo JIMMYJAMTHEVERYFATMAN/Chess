@@ -33,6 +33,7 @@ from .review_logic import (
     game_phase,
     raw_move_accuracy,
 )
+from .pgn_stats import PGN_STATS_VERSION, extract_pgn_stats
 
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 
@@ -311,6 +312,33 @@ class ChessComCastlingScanWorker(QThread):
         self.scan_done.emit(results)
 
 
+class ChessComPgnStatsWorker(QThread):
+    """Read saved PGNs once and derive small engine-free summaries in the background."""
+    progress=pyqtSignal(int,int)
+    scan_done=pyqtSignal(object)
+
+    def __init__(self,records,parent=None):
+        super().__init__(parent);self.records=list(records)
+
+    def run(self):
+        results=[];total=len(self.records)
+        for index,record in enumerate(self.records,1):
+            if self.isInterruptionRequested():break
+            game_id=record.get("game_id");summary=None;error=""
+            try:
+                with Path(record.get("pgn_path") or "").open("r",encoding="utf-8-sig") as source:
+                    game=chess.pgn.read_game(source)
+                if game is None:raise ValueError("PGN contains no game")
+                if game.errors:raise ValueError(f"PGN contains invalid moves: {game.errors[0]}")
+                summary=extract_pgn_stats(game,record.get("time_control",""))
+            except (OSError,UnicodeError,ValueError,chess.InvalidMoveError,chess.IllegalMoveError) as exc:
+                error=str(exc) or "Could not read PGN"
+                summary={"source":"pgn","version":PGN_STATS_VERSION,"error":error}
+            results.append((game_id,summary))
+            self.progress.emit(index,total)
+        self.scan_done.emit(results)
+
+
 class ProfileStore:
     """Small local summary database; full PGNs are optional and off by default."""
     def __init__(self):
@@ -343,7 +371,8 @@ class ProfileStore:
                 reviewed INTEGER NOT NULL DEFAULT 0, user_accuracy REAL, chesscom_accuracy REAL, predicted_elo INTEGER,
                 review_json TEXT NOT NULL DEFAULT '[]', stats_json TEXT NOT NULL DEFAULT '{}',
                 opponent_country TEXT NOT NULL DEFAULT '', opponent_country_checked INTEGER NOT NULL DEFAULT 0,
-                castling_scanned INTEGER NOT NULL DEFAULT 0, castling_phase TEXT NOT NULL DEFAULT '', castling_ply INTEGER)""")
+                castling_scanned INTEGER NOT NULL DEFAULT 0, castling_phase TEXT NOT NULL DEFAULT '', castling_ply INTEGER,
+                pgn_stats_version TEXT NOT NULL DEFAULT '', pgn_stats_json TEXT NOT NULL DEFAULT '{}')""")
             imported_columns={row[1] for row in db.execute("PRAGMA table_info(chesscom_games)")}
             if "stats_json" not in imported_columns:
                 db.execute("ALTER TABLE chesscom_games ADD COLUMN stats_json TEXT NOT NULL DEFAULT '{}'")
@@ -359,6 +388,10 @@ class ProfileStore:
                 db.execute("ALTER TABLE chesscom_games ADD COLUMN castling_phase TEXT NOT NULL DEFAULT ''")
             if "castling_ply" not in imported_columns:
                 db.execute("ALTER TABLE chesscom_games ADD COLUMN castling_ply INTEGER")
+            if "pgn_stats_version" not in imported_columns:
+                db.execute("ALTER TABLE chesscom_games ADD COLUMN pgn_stats_version TEXT NOT NULL DEFAULT ''")
+            if "pgn_stats_json" not in imported_columns:
+                db.execute("ALTER TABLE chesscom_games ADD COLUMN pgn_stats_json TEXT NOT NULL DEFAULT '{}'")
             db.commit()
         finally:db.close()
         self._migrate_saved_accuracy_model()
@@ -513,14 +546,14 @@ class ProfileStore:
             rows=db.execute("""SELECT game_id,username,played_at,result,user_color,user_result,player_rating,opponent,
                 opponent_rating,time_control,time_class,rated,rules,opening,pgn_path,reviewed,user_accuracy,
                 predicted_elo,review_json,stats_json,opponent_country,opponent_country_checked,chesscom_accuracy,
-                castling_scanned,castling_phase,castling_ply
+                castling_scanned,castling_phase,castling_ply,pgn_stats_version,pgn_stats_json
                 FROM chesscom_games WHERE username=? COLLATE NOCASE ORDER BY played_at DESC,game_id""",
                 (username,)).fetchall()
         finally:db.close()
         columns=("game_id","username","played_at","result","user_color","user_result","player_rating","opponent",
                  "opponent_rating","time_control","time_class","rated","rules","opening","pgn_path","reviewed",
                  "user_accuracy","predicted_elo","review_json","stats_json","opponent_country","opponent_country_checked",
-                 "chesscom_accuracy","castling_scanned","castling_phase","castling_ply")
+                 "chesscom_accuracy","castling_scanned","castling_phase","castling_ply","pgn_stats_version","pgn_stats_json")
         records=[dict(zip(columns,row)) for row in rows]
         for record in records:
             record["opening"]=chesscom_opening_label(record.get("opening",""))
@@ -564,6 +597,19 @@ class ProfileStore:
         db=self.connect()
         try:
             db.executemany("UPDATE chesscom_games SET castling_scanned=1,castling_phase=?,castling_ply=? WHERE game_id=?",rows);db.commit()
+        finally:db.close()
+
+    def set_chesscom_pgn_stats(self,results):
+        rows=[]
+        for game_id,summary in results:
+            if not isinstance(summary,dict) or summary.get("source")!="pgn" or summary.get("version")!=PGN_STATS_VERSION:
+                raise ValueError("Invalid PGN statistics summary")
+            rows.append((PGN_STATS_VERSION,json.dumps(summary,separators=(",",":")),game_id))
+        if not rows:return
+        db=self.connect()
+        try:
+            db.executemany("UPDATE chesscom_games SET pgn_stats_version=?,pgn_stats_json=? WHERE game_id=?",rows)
+            db.commit()
         finally:db.close()
 
     def full_pgns_enabled(self):
@@ -714,6 +760,7 @@ __all__ = [
     'chesscom_request_json',
     'ChessComFetchWorker',
     'ChessComCastlingScanWorker',
+    'ChessComPgnStatsWorker',
     'ProfileStore',
     'prepare_chesscom_pgn',
     'chesscom_pgn_clock_positions',

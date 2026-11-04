@@ -17,6 +17,7 @@ try:
     from PyQt6 import sip
     from PyQt6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, Qt, pyqtSignal
     from PyQt6.QtGui import QImage, QKeyEvent, QMouseEvent, QPainter
+    from PyQt6.QtWidgets import QTabWidget, QWidget
     from main import (
         analyze_review_events,
         removed_defender_event,
@@ -897,6 +898,14 @@ class ReviewAnalysisTests(unittest.TestCase):
                 store=ProfileStore()
                 opened=[]
                 dialog=ProfileDialog(store,opened.append)
+                self.assertTrue(hasattr(dialog,"chesscom_pgn_quick_values"))
+                self.assertEqual(len(dialog.chesscom_pgn_quick_values),12)
+                self.assertNotIn("eval",dialog.chesscom_pgn_quick_values)
+                self.assertTrue(dialog.chesscom_pgn_stats.isHidden())
+                dialog.chesscom_pgn_details_toggle.click()
+                self.assertFalse(dialog.chesscom_pgn_stats.isHidden())
+                dialog.chesscom_pgn_details_toggle.click()
+                self.assertTrue(dialog.chesscom_pgn_stats.isHidden())
                 self.assertEqual(dialog.tabs.tabText(1),"Settings")
                 self.assertEqual(dialog.tabs.tabText(2),"Chess.com")
                 self.assertGreaterEqual(len(BOARD_THEMES),12)
@@ -958,6 +967,62 @@ class ReviewAnalysisTests(unittest.TestCase):
             finally:
                 if previous is None:os.environ.pop("LOCALAPPDATA",None)
                 else:os.environ["LOCALAPPDATA"]=previous
+
+    def test_profile_opens_as_an_embedded_main_window_tab(self):
+        app=QApplication.instance() or QApplication([])
+        previous=os.environ.get("LOCALAPPDATA")
+        with tempfile.TemporaryDirectory(dir=os.getcwd()) as data_dir:
+            with patch.dict(os.environ,{"LOCALAPPDATA":data_dir,"XDG_DATA_HOME":data_dir}):
+                host=QWidget();host.profile_store=ProfileStore();host.profile_error=None
+                host.main_tabs=QTabWidget(host);host.main_tabs.addTab(QWidget(),"Game")
+                host.profile_tab_placeholder=QWidget();host.main_tabs.addTab(host.profile_tab_placeholder,"Profile")
+                host.profile_placeholder_label=QLabel("Open your profile insights and saved games here.")
+                host.profile_page=None;host._installing_profile_page=False;host._saved_game_stats_cache=["stale"]
+                host.set_board_theme=lambda *_:None;host.set_board_presentation=lambda *_:None
+                host.set_sound=lambda *_:None;host.load_opening_dialog=lambda *_:None;host.load_book_dialog=lambda *_:None
+                host.open_saved_game=lambda *_:None;host._stylesheet=lambda:""
+                host.puzzle_dialog=SimpleNamespace(refresh_high_score=lambda:None)
+                host._ensure_profile_page=MainWindowUi._ensure_profile_page.__get__(host,QWidget)
+                host._main_tab_changed=MainWindowUi._main_tab_changed.__get__(host,QWidget)
+                host._schedule_profile_refresh=MainWindowUi._schedule_profile_refresh.__get__(host,QWidget)
+                host._refresh_profile_page=MainWindowUi._refresh_profile_page.__get__(host,QWidget)
+                host.main_tabs.currentChanged.connect(host._main_tab_changed)
+                host.open_profile=MainWindowUi.open_profile.__get__(host,QWidget)
+                self.assertEqual(host.main_tabs.tabText(1),"Profile")
+                self.assertIsNone(host.profile_page)
+                host.main_tabs.setCurrentIndex(1)
+                self.assertIsNotNone(host.profile_page)
+                host.main_tabs.setCurrentIndex(0)
+                host.open_profile()
+                self.assertEqual(host.main_tabs.tabText(host.main_tabs.indexOf(host.profile_page)),"Profile")
+                self.assertIs(host.main_tabs.currentWidget(),host.profile_page)
+                self.assertFalse(host.profile_page.isWindow())
+                self.assertIsNone(host._saved_game_stats_cache)
+                host.profile_page._open_game_and_return("saved game")
+                self.assertEqual(host.main_tabs.currentIndex(),0)
+                host.close();host.deleteLater();app.processEvents()
+        if previous is None:os.environ.pop("LOCALAPPDATA",None)
+        else:os.environ["LOCALAPPDATA"]=previous
+
+    def test_profile_loading_shadow_stays_visible_until_all_tasks_finish(self):
+        app=QApplication.instance() or QApplication([])
+        previous=os.environ.get("LOCALAPPDATA")
+        with tempfile.TemporaryDirectory(dir=os.getcwd()) as data_dir:
+            with patch.dict(os.environ,{"LOCALAPPDATA":data_dir,"XDG_DATA_HOME":data_dir}):
+                dialog=ProfileDialog(ProfileStore(),lambda _game:None);dialog.show();app.processEvents()
+                first=dialog.begin_profile_loading("Loading Overview…")
+                second=dialog.begin_profile_loading("Reading saved PGNs…")
+                self.assertFalse(dialog.profile_loading_overlay.isHidden())
+                self.assertEqual(dialog.profile_loading_label.text(),"Reading saved PGNs…")
+                self.assertEqual(dialog.profile_loading_animation.state().name,"Running")
+                dialog._finish_profile_loading(first,dialog._profile_loading_tasks[first][0])
+                self.assertFalse(dialog.profile_loading_overlay.isHidden())
+                dialog._finish_profile_loading(second,dialog._profile_loading_tasks[second][0])
+                self.assertTrue(dialog.profile_loading_overlay.isHidden())
+                self.assertEqual(dialog.profile_loading_animation.state().name,"Stopped")
+                dialog.close();dialog.deleteLater();app.processEvents()
+        if previous is None:os.environ.pop("LOCALAPPDATA",None)
+        else:os.environ["LOCALAPPDATA"]=previous
 
     def test_profile_settings_controls_and_persisted_preferences(self):
         app=QApplication.instance() or QApplication([])

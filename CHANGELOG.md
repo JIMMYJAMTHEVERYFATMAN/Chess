@@ -1,5 +1,24 @@
 # Changelog
 
+## [v1.1.5.0] - 2026-11-04
+
+### Added
+
+- Embedded Profile in the main app window, with a tab visible from startup.
+- Compact quick-access insights calculated directly from saved Chess.com PGNs, including move, capture, check, castling, promotion, position, clock, and time-per-move statistics. These summaries do not require engine review.
+- A pulsing shadow loading frame on Profile pages while page data, profile refreshes, archive requests, or background PGN scans are in progress.
+
+### Changed
+
+- Profile preferences and Chess.com data are now available as tabs inside the main window instead of a separate pop-up.
+- Time-per-move statistics use PGN elapsed-time annotations when present and can derive elapsed time from clock annotations and the game's time control.
+- Removed the Eval Tags insight, which was not provided consistently by imported PGNs.
+
+### Verification
+
+- All 124 `test_review_analysis` tests pass. The full 158-test local suite has two dashboard HTTP tests blocked by this environment's socket restrictions; the remaining tests pass.
+- The release workflow runs the test, Windows packaging, Linux packaging, and release publishing jobs when this tag is pushed.
+
 ## [v1.1.4.2] - 2026-11-04
 
 ### Added

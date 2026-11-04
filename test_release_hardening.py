@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import os
 import tempfile
@@ -28,10 +29,12 @@ from offline_chess import local_dashboard, telemetry, usage_database
 from offline_chess.chesscom_data import (
     ChessComCastlingScanWorker,
     ChessComFetchWorker,
+    ChessComPgnStatsWorker,
     ProfileStore,
     validate_chesscom_archive_url,
     validate_chesscom_country_url,
 )
+from offline_chess.pgn_stats import PGN_STATS_VERSION, aggregate_pgn_stats, extract_pgn_stats
 from offline_chess.review_logic import castling_timing_label
 from offline_chess.ui.profile_dialog import ProfileDialog
 
@@ -522,6 +525,114 @@ class ChessComImportEdgeTests(unittest.TestCase):
                     self.assertEqual(record["castling_scanned"], 1)
                     self.assertEqual(record["castling_phase"], "Opening")
                     self.assertEqual(record["castling_ply"], 5)
+        finally:
+            if previous is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = previous
+
+
+class ChessComPgnStatsTests(unittest.TestCase):
+    def test_mainline_summary_counts_moves_events_annotations_and_repetition(self):
+        game = chess.pgn.read_game(io.StringIO(
+            '[Event "annotated"]\n[Result "1-0"]\n\n'
+            '1. e4 {[%clk 0:05:00] [%emt 0:00:02] [%eval 0.2]} '
+            'e5 {[%clk 0:04:59] [%emt 0:00:01]} 2. Bc4 Nc6 3. Qh5 Nf6 4. Qxf7# 1-0\n'))
+        summary = extract_pgn_stats(game)
+        self.assertEqual(summary["source"], "pgn")
+        self.assertEqual(summary["plies"], 7)
+        self.assertEqual(summary["moves"], {"White": 4, "Black": 3})
+        self.assertEqual(summary["moves_by_piece"]["White"]["pawn"], 1)
+        self.assertEqual(summary["checks"]["White"], 1)
+        self.assertEqual(summary["captures"]["White"], 1)
+        self.assertEqual(summary["captured_pieces"]["White"], {"pawn": 1})
+        self.assertEqual(summary["clock_annotations"], {"White": 1, "Black": 1})
+        self.assertEqual(summary["elapsed_seconds"], {"White": 2, "Black": 1})
+        self.assertNotIn("evaluation_annotations", summary)
+        self.assertEqual(summary["final_position"], "checkmate")
+
+        repeated = extract_pgn_stats(chess.pgn.read_game(io.StringIO(
+            '[Event "repeat"]\n\n1. Nf3 Nf6 2. Ng1 Ng8 *\n')))
+        self.assertEqual(repeated["repeated_positions"], 1)
+
+    def test_time_per_move_uses_clock_tags_and_time_control_increment(self):
+        game = chess.pgn.read_game(io.StringIO(
+            '[Event "clocked"]\n[TimeControl "300+5"]\n\n'
+            '1. e4 {[%clk 0:04:59]} e5 {[%clk 0:04:58]} '
+            '2. Nf3 {[%clk 0:04:56]} Nc6 {[%clk 0:04:55]} *\n'))
+        summary = extract_pgn_stats(game)
+        self.assertEqual(summary["elapsed_annotations"], {"White": 2, "Black": 2})
+        self.assertEqual(summary["elapsed_seconds"], {"White": 14.0, "Black": 15.0})
+        record = {"user_color": "White", "pgn_stats_json": json.dumps(summary)}
+        rows = {row[0]: (row[1], row[2]) for row in aggregate_pgn_stats([record])["rows"]}
+        self.assertEqual(rows["Your time per move"][0], "7.0 sec/move · 2 moves")
+        self.assertIn("time control", rows["Your time per move"][1])
+
+    def test_aggregate_keeps_optional_annotations_distinct_from_zero(self):
+        stats = extract_pgn_stats(chess.pgn.read_game(io.StringIO(
+            '[Event "plain"]\n\n1. e4 e5 *\n')))
+        record = {"user_color": "White", "pgn_stats_json": json.dumps(stats)}
+        aggregate = aggregate_pgn_stats([record])
+        values = {row[0]: (row[1], row[2]) for row in aggregate["rows"]}
+        self.assertIn("Only where Chess.com included [%clk]", values["Your clock annotations"][1])
+        self.assertEqual(values["Your time per move"][0], "Not provided")
+        self.assertNotIn("Evaluation annotations", values)
+        self.assertEqual(aggregate["valid"], 1)
+        missing_color = aggregate_pgn_stats([{"pgn_stats_json": json.dumps(stats)}])
+        self.assertEqual(missing_color["valid"], 1)
+        mixed = aggregate_pgn_stats([
+            {"user_color": "White", "pgn_stats_json": json.dumps(extract_pgn_stats(chess.pgn.read_game(io.StringIO(
+                '[Event "mate"]\n\n1. e4 e5 2. Bc4 Nc6 3. Qh5 Nf6 4. Qxf7# 1-0\n'))))},
+            {"user_color": "Black", "pgn_stats_json": json.dumps(extract_pgn_stats(chess.pgn.read_game(io.StringIO(
+                '[Event "mate"]\n\n1. e4 e5 2. Bc4 Nc6 3. Qh5 Nf6 4. Qxf7# 1-0\n'))))},
+        ])
+        mixed_values = {row[0]: row[1] for row in mixed["rows"]}
+        self.assertEqual(mixed_values["Your checks"], "0.5 per game")
+        self.assertEqual(mixed_values["Your captures"], "0.5 per game · pawn 1")
+        stale = dict(record, pgn_stats_json=json.dumps(dict(stats, version="0")))
+        self.assertEqual(aggregate_pgn_stats([stale])["pending"], 1)
+
+    def test_worker_reports_bad_files_and_store_migrates_and_caches_summaries(self):
+        previous = os.environ.get("LOCALAPPDATA")
+        try:
+            with tempfile.TemporaryDirectory(dir=os.getcwd()) as folder:
+                with patch.dict(os.environ, {"LOCALAPPDATA": folder, "XDG_DATA_HOME": folder}):
+                    store = ProfileStore()
+                    good = store.save_chesscom_game("player1", {
+                        "url": "https://www.chess.com/game/live/pgn-stats",
+                        "end_time": 1793450000,
+                        "pgn": '[Event "Online"]\n[White "player1"]\n[Black "opponent"]\n[Result "*"]\n\n1. e4 e5 *\n',
+                        "white": {"username": "player1", "rating": 1500},
+                        "black": {"username": "opponent", "rating": 1480},
+                    })
+                    record = store.chesscom_games("player1")[0]
+                    broken_path = Path(folder) / "broken.pgn"
+                    broken_path.write_text('[Event "bad"]\n\n1. e4 e5 2. f4 e5 *\n', encoding="utf-8")
+                    worker = ChessComPgnStatsWorker([
+                        record, {"game_id": "bad", "pgn_path": str(broken_path)},
+                    ])
+                    received = []
+                    worker.scan_done.connect(received.append)
+                    worker.run()
+                    results = received[0]
+                    self.assertEqual(results[0][0], good)
+                    self.assertEqual(results[0][1]["plies"], 2)
+                    self.assertIn("error", results[1][1])
+                    store.set_chesscom_pgn_stats([results[0]])
+                    cached = store.chesscom_games("player1")[0]
+                    self.assertEqual(cached["pgn_stats_version"], PGN_STATS_VERSION)
+                    self.assertEqual(json.loads(cached["pgn_stats_json"])["plies"], 2)
+
+                    db = store.connect()
+                    try:
+                        db.execute("ALTER TABLE chesscom_games DROP COLUMN pgn_stats_version")
+                        db.execute("ALTER TABLE chesscom_games DROP COLUMN pgn_stats_json")
+                        db.commit()
+                    finally:
+                        db.close()
+                    migrated = ProfileStore().chesscom_games("player1")[0]
+                    self.assertEqual(migrated["pgn_stats_version"], "")
+                    self.assertEqual(migrated["pgn_stats_json"], "{}")
         finally:
             if previous is None:
                 os.environ.pop("LOCALAPPDATA", None)

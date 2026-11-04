@@ -26,7 +26,6 @@ from PyQt6.QtGui import QDesktopServices
 
 from offline_chess.ui import main_window as main_window_module
 from offline_chess.ui.main_window import ChessWindow
-from offline_chess.ui.profile_dialog import ProfileDialog
 from offline_chess.ui.feedback_dialog import FeedbackDialog
 
 # The smoke sweep must not make or persist a privacy choice.
@@ -230,12 +229,13 @@ rows[-1]["details"] = f"analysis completion observed={analysis_done is not None}
 # Profile is isolated. Exercise each tab, every button and combo value;
 # dialogs, file choosers, desktop links, and network calls are stubbed.
 profile_start = time.perf_counter()
-profile = ProfileDialog(window.profile_store, window.open_saved_game, parent=window)
-profile.show()
+window.open_profile()
+profile = window.profile_page
 app.processEvents()
-rows.append({"group": "Profile", "entry_point": "Profile dialog", "action": "construct",
+rows.append({"group": "Profile", "entry_point": "Profile tab", "action": "open embedded profile",
              "ui_response_ms": f"{(time.perf_counter()-profile_start)*1000:.1f}", "end_to_end_ms": "",
-             "status": "ok", "details": f"tabs={profile.tabs.count()}"})
+             "status": "ok" if profile is not None and not profile.isWindow() else "error",
+             "details": f"tabs={profile.tabs.count() if profile else 0}; embedded={bool(profile and not profile.isWindow())}"})
 for index in range(profile.tabs.count()):
     label = profile.tabs.tabText(index)
     record("Profile", f"tab: {label}", "select tab", lambda i=index: profile.tabs.setCurrentIndex(i))

@@ -5,38 +5,39 @@ import json
 import math
 import re
 import sqlite3
+import time
 from collections import Counter, OrderedDict
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import chess
 import chess.pgn
-from PyQt6.QtCore import Qt, QThread, QUrl, pyqtSignal, pyqtSlot, QObject, QPointF, QRectF, QTimer
+from PyQt6.QtCore import Qt, QThread, QUrl, pyqtSignal, pyqtSlot, QObject, QPointF, QRectF, QTimer, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QBrush, QAction, QPolygonF, QDesktopServices
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QSlider, QDialog,
+    QApplication, QWidget, QFrame, QLabel, QPushButton, QSlider,
     QVBoxLayout, QHBoxLayout, QGridLayout, QSplitter, QTableWidget,
-    QTableWidgetItem, QHeaderView, QFileDialog, QMessageBox, QProgressBar,
+    QTableWidgetItem, QHeaderView, QFileDialog, QMessageBox, QProgressBar, QGraphicsDropShadowEffect,
     QCheckBox, QSpinBox, QComboBox, QAbstractItemView, QScrollArea, QSizePolicy,
     QStackedWidget, QToolTip, QMenu, QTabWidget, QLineEdit,
 )
 
 from ..chesscom_data import *
+from ..pgn_stats import PGN_STATS_VERSION, aggregate_pgn_stats
 from ..openings import *
 from ..review_logic import *
 from .board import *
 from .charts import *
-from .common import fit_dialog_to_screen
 from .feedback_dialog import FeedbackDialog
 from .review_dialogs import *
 from .theme import *
 
-class ProfileDialog(QDialog):
+class ProfileDialog(QWidget):
     def __init__(self,store,open_game_callback,theme_changed_callback=None,presentation_changed_callback=None,parent=None,
                  sound_changed_callback=None,load_opening_callback=None,load_book_callback=None):
         super().__init__(parent);self.store=store;self.open_game_callback=open_game_callback;self.theme_changed_callback=theme_changed_callback;self.presentation_changed_callback=presentation_changed_callback
-        self.setWindowTitle("Player Profile · Offline Chess");fit_dialog_to_screen(self,parent,1600,1150)
         root_layout=QVBoxLayout(self);self.tabs=QTabWidget();root_layout.addWidget(self.tabs)
+        self._profile_loading_tasks={};self._build_loading_overlay()
         overview_page=QWidget();layout=QVBoxLayout(overview_page);self.tabs.addTab(overview_page,"Overview")
         self.rating=QLabel();self.rating.setObjectName("Brand");layout.addWidget(self.rating)
         self.rating_note=QLabel();self.rating_note.setObjectName("Muted");layout.addWidget(self.rating_note)
@@ -83,8 +84,69 @@ class ProfileDialog(QDialog):
         self.clear_btn=QPushButton("Delete stored PGNs");self.clear_btn.clicked.connect(self.clear_pgn_data);settings.addWidget(self.clear_btn);layout.addLayout(settings)
         self._build_settings_page(sound_changed_callback,load_opening_callback,load_book_callback)
         self._build_chesscom_page()
-        self.tabs.currentChanged.connect(self._load_chesscom_on_tab)
+        self.tabs.currentChanged.connect(self._profile_page_changed)
         self.refresh()
+
+    def _build_loading_overlay(self):
+        self.profile_loading_overlay=QFrame(self.tabs);self.profile_loading_overlay.setObjectName("ProfileLoadingOverlay")
+        self.profile_loading_overlay.setStyleSheet("QFrame#ProfileLoadingOverlay { background: rgba(20,22,24,175); }")
+        self.profile_loading_overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents,True)
+        overlay_layout=QVBoxLayout(self.profile_loading_overlay);overlay_layout.addStretch(1)
+        self.profile_loading_frame=QFrame();self.profile_loading_frame.setObjectName("ProfileLoadingFrame")
+        self.profile_loading_frame.setStyleSheet("QFrame#ProfileLoadingFrame { background: #242729; border: 1px solid #b5e08e; border-radius: 12px; }")
+        frame_layout=QVBoxLayout(self.profile_loading_frame);frame_layout.setContentsMargins(24,14,24,14)
+        self.profile_loading_label=QLabel("Loading profile…");self.profile_loading_label.setObjectName("AccentText")
+        self.profile_loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter);frame_layout.addWidget(self.profile_loading_label)
+        overlay_layout.addWidget(self.profile_loading_frame,0,Qt.AlignmentFlag.AlignCenter);overlay_layout.addStretch(1)
+        shadow=QGraphicsDropShadowEffect(self.profile_loading_frame);shadow.setBlurRadius(10)
+        shadow.setColor(QColor(181,224,142,190));shadow.setOffset(0,0);self.profile_loading_frame.setGraphicsEffect(shadow)
+        self.profile_loading_animation=QPropertyAnimation(shadow,b"blurRadius",self)
+        self.profile_loading_animation.setDuration(900);self.profile_loading_animation.setStartValue(8.0)
+        self.profile_loading_animation.setKeyValueAt(.5,26.0);self.profile_loading_animation.setEndValue(8.0)
+        self.profile_loading_animation.setEasingCurve(QEasingCurve.Type.InOutSine);self.profile_loading_animation.setLoopCount(-1)
+        self.profile_loading_overlay.hide()
+
+    def begin_profile_loading(self,message="Loading profile…"):
+        token=object();self._profile_loading_tasks[token]=(time.monotonic(),str(message))
+        self.profile_loading_label.setText(str(message));self.profile_loading_overlay.setGeometry(self.tabs.rect())
+        self.profile_loading_overlay.show();self.profile_loading_overlay.raise_()
+        if self.profile_loading_animation.state()!=QPropertyAnimation.State.Running:self.profile_loading_animation.start()
+        return token
+
+    def end_profile_loading(self,token):
+        if token not in self._profile_loading_tasks:return
+        started,_message=self._profile_loading_tasks[token]
+        remaining=max(0,int(220-(time.monotonic()-started)*1000))
+        if remaining:
+            QTimer.singleShot(remaining,lambda:self._finish_profile_loading(token,started))
+        else:self._finish_profile_loading(token,started)
+
+    def _finish_profile_loading(self,token,started):
+        current=self._profile_loading_tasks.get(token)
+        if current is None or current[0]!=started:return
+        self._profile_loading_tasks.pop(token,None)
+        if self._profile_loading_tasks:
+            self.profile_loading_label.setText(list(self._profile_loading_tasks.values())[-1][1])
+        else:
+            self.profile_loading_animation.stop();self.profile_loading_overlay.hide()
+
+    def _profile_page_changed(self,index):
+        page_name=self.tabs.tabText(index) if index>=0 else "Profile"
+        token=self.begin_profile_loading(f"Loading {page_name.lower()}…")
+        QTimer.singleShot(0,lambda:self._finish_profile_page_change(index,token))
+
+    def _finish_profile_page_change(self,index,token):
+        try:
+            if index==0:self.refresh()
+            elif index==self.tabs.indexOf(self.chesscom_scroll):
+                if not self._chesscom_data_loaded:self._load_chesscom_on_tab(index)
+                else:self.refresh_chesscom_library(self.chesscom_username.text())
+        finally:self.end_profile_loading(token)
+
+    def resizeEvent(self,event):
+        super().resizeEvent(event)
+        if hasattr(self,"profile_loading_overlay"):
+            self.profile_loading_overlay.setGeometry(self.tabs.rect())
 
     def _build_settings_page(self,sound_changed_callback,load_opening_callback,load_book_callback):
         scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -109,7 +171,7 @@ class ProfileDialog(QDialog):
         self.load_book_btn=QPushButton("Load weighted book")
         self.load_book_btn.setToolTip("Choose a local Polyglot .bin book for opening suggestions and review context.")
         self.load_book_btn.setEnabled(load_book_callback is not None)
-        current_book=getattr(self.parent(),"book_path",None)
+        current_book=getattr(self._owner_window(),"book_path",None)
         if current_book:
             self.load_book_btn.setText("Weighted book loaded")
             self.load_book_btn.setToolTip(f"Loaded weighted opening book: {Path(current_book).name}")
@@ -152,13 +214,20 @@ class ProfileDialog(QDialog):
         else:
             self.store.set_setting("sound_effects_enabled","1" if enabled else "0")
 
+    def _owner_window(self):
+        parent=self.parent()
+        while parent is not None:
+            if hasattr(parent,"main_tabs"):return parent
+            parent=parent.parent()
+        return None
+
     def _run_database_loader(self,callback):
         if callback:callback(self)
 
     def _load_weighted_book(self,callback):
         if not callback:return
         callback(self)
-        book_path=getattr(self.parent(),"book_path",None)
+        book_path=getattr(self._owner_window(),"book_path",None)
         if book_path:
             self.load_book_btn.setText("Weighted book loaded")
             self.load_book_btn.setToolTip(f"Loaded weighted opening book: {Path(book_path).name}")
@@ -182,14 +251,19 @@ class ProfileDialog(QDialog):
         username=self.chesscom_username.text().strip()
         if not username:return
         self.chesscom_status.setText("Loading Chess.com insights and downloaded games…")
+        self._chesscom_initial_loading_token=self.begin_profile_loading("Loading Chess.com…")
         QTimer.singleShot(0,lambda:self._finish_chesscom_initial_load(username))
 
     def _finish_chesscom_initial_load(self,username):
-        self.refresh_chesscom_library(username)
-        if self.chesscom_status.text()=="Loading Chess.com insights and downloaded games…":
-            count=len(self._chesscom_all_games)
-            noun="game" if count==1 else "games"
-            self.chesscom_status.setText(f"Loaded {count:,} downloaded {noun}.")
+        try:
+            self.refresh_chesscom_library(username)
+            if self.chesscom_status.text()=="Loading Chess.com insights and downloaded games…":
+                count=len(self._chesscom_all_games)
+                noun="game" if count==1 else "games"
+                self.chesscom_status.setText(f"Loaded {count:,} downloaded {noun}.")
+        finally:
+            self.end_profile_loading(getattr(self,"_chesscom_initial_loading_token",None))
+            self._chesscom_initial_loading_token=None
 
     def _build_chesscom_page(self):
         scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -224,6 +298,33 @@ class ProfileDialog(QDialog):
             self.chesscom_metric_values[key]=value;self.chesscom_metric_notes[key]=detail
             metric_grid.addWidget(card,index//3,index%3)
         layout.addLayout(metric_grid)
+        pgn_header=QHBoxLayout();pgn_title=QLabel("QUICK PGN INSIGHTS · NO ENGINE REVIEW");pgn_title.setObjectName("SectionTitle");pgn_header.addWidget(pgn_title,1)
+        self.chesscom_pgn_stats_status=QLabel("Derived from saved PGNs; move times use [%emt] or Chess.com clock tags where available.")
+        self.chesscom_pgn_stats_status.setObjectName("Muted");pgn_header.addWidget(self.chesscom_pgn_stats_status)
+        self.chesscom_pgn_stats_rescan=QPushButton("Rescan");self.chesscom_pgn_stats_rescan.setToolTip("Recalculate local statistics from saved PGNs. No engine is used.")
+        self.chesscom_pgn_stats_rescan.clicked.connect(self.rescan_chesscom_pgn_stats);pgn_header.addWidget(self.chesscom_pgn_stats_rescan)
+        self.chesscom_pgn_details_toggle=QPushButton("Show breakdown");self.chesscom_pgn_details_toggle.setCheckable(True)
+        self.chesscom_pgn_details_toggle.toggled.connect(self._toggle_chesscom_pgn_details);pgn_header.addWidget(self.chesscom_pgn_details_toggle)
+        layout.addLayout(pgn_header)
+        self.chesscom_pgn_stats_progress=QProgressBar();self.chesscom_pgn_stats_progress.setTextVisible(False)
+        self.chesscom_pgn_stats_progress.setMaximumHeight(5);self.chesscom_pgn_stats_progress.setVisible(False);layout.addWidget(self.chesscom_pgn_stats_progress)
+        pgn_grid=QGridLayout();pgn_grid.setHorizontalSpacing(6);pgn_grid.setVerticalSpacing(6)
+        self.chesscom_pgn_quick_values={}
+        for index,(key,title) in enumerate((
+            ("length","AVG LENGTH"),("checks","CHECKS / GAME"),("your_checks","YOUR CHECKS"),
+            ("your_captures","YOUR CAPTURES"),("opponent_captures","OPP. CAPTURES"),
+            ("castling","CASTLING"),("promotions","PROMOTIONS"),("queenless","QUEENLESS"),
+            ("repeated","REPEATED POS."),("finish","MATE / STALEMATE"),
+            ("clock","CLOCK TAGS"),("elapsed","TIME / MOVE"))):
+            card=QFrame();card.setObjectName("SidePanel");card.setToolTip("Calculated from saved PGN mainlines. Select Show breakdown for coverage and move-by-piece details.")
+            card_layout=QVBoxLayout(card);card_layout.setContentsMargins(8,5,8,5);card_layout.setSpacing(1)
+            caption=QLabel(title);caption.setObjectName("Muted");card_layout.addWidget(caption)
+            value=QLabel("—");value.setObjectName("AccentText");value.setMinimumHeight(20);card_layout.addWidget(value)
+            self.chesscom_pgn_quick_values[key]=value;pgn_grid.addWidget(card,index//7,index%7)
+        layout.addLayout(pgn_grid)
+        self.chesscom_pgn_stats=QTableWidget(0,3);self.chesscom_pgn_stats.setHorizontalHeaderLabels(["Measure","Result","Coverage / source"])
+        self._configure_chesscom_table(self.chesscom_pgn_stats);self.chesscom_pgn_stats.setMaximumHeight(300)
+        self.chesscom_pgn_stats.setVisible(False);layout.addWidget(self.chesscom_pgn_stats)
         past_title=QLabel("PAST PERFORMANCE");past_title.setObjectName("SectionTitle");layout.addWidget(past_title)
         self.chesscom_period_comparison=QLabel("Choose a recent insights period to compare it with the preceding period.");self.chesscom_period_comparison.setObjectName("ReviewSummary");self.chesscom_period_comparison.setWordWrap(True);layout.addWidget(self.chesscom_period_comparison)
         self.chesscom_trends=QLabel("Download games to build your rating, results, and opening trends.");self.chesscom_trends.setObjectName("ReviewSummary");self.chesscom_trends.setWordWrap(True);layout.addWidget(self.chesscom_trends)
@@ -335,7 +436,7 @@ class ProfileDialog(QDialog):
         self.chesscom_folder=QPushButton("Open PGN folder");self.chesscom_folder.clicked.connect(self.open_chesscom_folder);library_actions.addWidget(self.chesscom_folder)
         self.chesscom_delete=QPushButton("Remove selected");self.chesscom_delete.clicked.connect(self.delete_selected_chesscom);library_actions.addWidget(self.chesscom_delete);library_actions.addStretch();layout.addLayout(library_actions)
         scroll.setWidget(page);self.chesscom_scroll=scroll;self.tabs.addTab(scroll,"Chess.com")
-        self._chesscom_archives=[];self._chesscom_available_games=[];self._chesscom_worker=None;self._chesscom_known_game_ids=set();self._chesscom_latest_game_month="";self._castling_scan_worker=None;self._chesscom_castling_scan_records=[];self._chesscom_castling_scan_summary="";self._chesscom_download_errors=0;self._chesscom_review_cache={};self._chesscom_pgn_header_cache={};self._chesscom_opening_mastery_cache={};self._chesscom_book_positions_cache=(None,set());self._chesscom_opening_trend_data={}
+        self._chesscom_archives=[];self._chesscom_available_games=[];self._chesscom_worker=None;self._chesscom_known_game_ids=set();self._chesscom_latest_game_month="";self._castling_scan_worker=None;self._pgn_stats_worker=None;self._chesscom_pgn_stats_records=[];self._chesscom_pgn_stats_summary="";self._chesscom_castling_scan_records=[];self._chesscom_castling_scan_summary="";self._chesscom_download_errors=0;self._chesscom_review_cache={};self._chesscom_pgn_header_cache={};self._chesscom_opening_mastery_cache={};self._chesscom_book_positions_cache=(None,set());self._chesscom_opening_trend_data={}
         self._chesscom_data_loaded=False
 
     @staticmethod
@@ -359,6 +460,7 @@ class ProfileDialog(QDialog):
         self.chesscom_country_lookup.setEnabled(False)
         worker=ChessComFetchWorker(operation,username,archive_url,opponents,QApplication.instance(),
                                    known_game_ids=known_game_ids,minimum_archive_month=minimum_archive_month);self._chesscom_worker=worker
+        worker._profile_loading_token=self.begin_profile_loading("Loading Chess.com…")
         worker.archives_ready.connect(self._chesscom_archives_loaded);worker.month_ready.connect(self._chesscom_month_loaded)
         worker.month_downloaded.connect(self._chesscom_month_downloaded);worker.progress.connect(self._chesscom_all_progress)
         worker.country_ready.connect(self._chesscom_country_ready);worker.countries_progress.connect(self._chesscom_country_progress)
@@ -484,13 +586,16 @@ class ProfileDialog(QDialog):
     def _chesscom_fetch_failed(self,message):self.chesscom_status.setText(message)
 
     def _chesscom_worker_finished(self):
-        if self.sender() is not self._chesscom_worker:return
+        worker=self.sender()
+        if worker is not self._chesscom_worker:return
+        loading_token=getattr(worker,"_profile_loading_token",None)
         self._chesscom_worker=None;self.chesscom_username.setEnabled(True);self.chesscom_connect.setEnabled(True);self.chesscom_download_all.setEnabled(True)
         self.chesscom_update_downloads.setEnabled(bool(self._chesscom_known_game_ids))
         self.chesscom_month.setEnabled(True);self.chesscom_available.setEnabled(True)
         self.chesscom_download_selected.setEnabled(True);self.chesscom_download_month.setEnabled(True);self.chesscom_country_lookup.setEnabled(True)
         self.chesscom_progress.setVisible(False)
         self.chesscom_country_cancel.setVisible(False)
+        self.end_profile_loading(loading_token)
 
     def cancel_chesscom_country_lookup(self):
         if self._chesscom_worker and self._chesscom_worker.operation=="countries":
@@ -629,6 +734,7 @@ class ProfileDialog(QDialog):
         self.chesscom_castling_scan_progress.setRange(0,len(records));self.chesscom_castling_scan_progress.setValue(0)
         self.chesscom_castling_scan_progress.setVisible(True)
         worker=ChessComCastlingScanWorker(records,self);self._castling_scan_worker=worker
+        worker._profile_loading_token=self.begin_profile_loading("Scanning castling timing…")
         worker.progress.connect(self._chesscom_castling_scan_progress)
         worker.scan_done.connect(self._chesscom_castling_scan_done)
         worker.finished.connect(self._chesscom_castling_scan_worker_finished)
@@ -655,9 +761,92 @@ class ProfileDialog(QDialog):
     def _chesscom_castling_scan_worker_finished(self):
         if self.sender() is not self._castling_scan_worker:return
         self._castling_scan_worker=None;self.chesscom_castling_scan_progress.setVisible(False)
+        self.end_profile_loading(getattr(self.sender(),"_profile_loading_token",None))
         self.refresh_chesscom_library(self.chesscom_username.text())
         if self._chesscom_castling_scan_summary:
             self.chesscom_castling_scan_status.setText(self._chesscom_castling_scan_summary)
+
+    def rescan_chesscom_pgn_stats(self):
+        if self._pgn_stats_worker and self._pgn_stats_worker.isRunning():return
+        self._start_chesscom_pgn_stats_scan(self._chesscom_pgn_stats_records)
+
+    def _start_chesscom_pgn_stats_scan(self,records):
+        records=list(records)
+        if not records:return
+        self.chesscom_pgn_stats_rescan.setEnabled(False)
+        self.chesscom_pgn_stats_status.setText(f"Reading {len(records):,} saved PGNs for local statistics…")
+        self.chesscom_pgn_stats_progress.setRange(0,len(records));self.chesscom_pgn_stats_progress.setValue(0)
+        self.chesscom_pgn_stats_progress.setVisible(True)
+        worker=ChessComPgnStatsWorker(records,self);self._pgn_stats_worker=worker
+        worker._profile_loading_token=self.begin_profile_loading("Reading saved PGNs…")
+        worker.progress.connect(self._chesscom_pgn_stats_progress)
+        worker.scan_done.connect(self._chesscom_pgn_stats_done)
+        worker.finished.connect(self._chesscom_pgn_stats_worker_finished)
+        worker.finished.connect(worker.deleteLater);worker.start()
+
+    def _chesscom_pgn_stats_progress(self,done,total):
+        self.chesscom_pgn_stats_progress.setRange(0,max(1,total));self.chesscom_pgn_stats_progress.setValue(done)
+
+    def _chesscom_pgn_stats_done(self,results):
+        try:
+            self.store.set_chesscom_pgn_stats(results)
+            failed=sum(bool(summary.get("error")) for _,summary in results)
+            self._chesscom_pgn_stats_summary=(f"Scanned {len(results):,} PGNs locally · {failed:,} unreadable" if failed
+                                              else f"Scanned {len(results):,} PGNs locally · no engine review")
+        except (OSError,sqlite3.Error,TypeError,ValueError) as exc:
+            self._chesscom_pgn_stats_summary=f"Could not save PGN statistics: {exc}"
+
+    def _chesscom_pgn_stats_worker_finished(self):
+        if self.sender() is not self._pgn_stats_worker:return
+        self._pgn_stats_worker=None;self.chesscom_pgn_stats_progress.setVisible(False)
+        self.end_profile_loading(getattr(self.sender(),"_profile_loading_token",None))
+        self.refresh_chesscom_library(self.chesscom_username.text())
+        if self._chesscom_pgn_stats_summary:
+            self.chesscom_pgn_stats_status.setText(self._chesscom_pgn_stats_summary)
+
+    def _refresh_chesscom_pgn_stats(self,games):
+        summary=aggregate_pgn_stats(games);self.chesscom_pgn_stats.setRowCount(0)
+        figures={}
+        for measure,value,coverage in summary["rows"]:
+            figures[measure]=(value,coverage)
+            row=self.chesscom_pgn_stats.rowCount();self.chesscom_pgn_stats.insertRow(row)
+            for column,text in enumerate((measure,value,coverage)):
+                self.chesscom_pgn_stats.setItem(row,column,QTableWidgetItem(str(text)))
+        compact={
+            "length":("Average game length",lambda value:value.removesuffix(" moves")),
+            "checks":("Checks delivered",lambda value:value.removesuffix(" per game")),
+            "your_checks":("Your checks",lambda value:value.removesuffix(" per game")),
+            "your_captures":("Your captures",lambda value:value.split(" · ",1)[0].removesuffix(" per game")),
+            "opponent_captures":("Opponent captures",lambda value:value.removesuffix(" per game")),
+            "castling":("Your castling",lambda value:value.split(" · ",1)[0].removesuffix(" games")),
+            "promotions":("Your promotions",lambda value:value.split(" · ",1)[0]),
+            "queenless":("Queenless positions reached",lambda value:value),
+            "repeated":("Games with a repeated position",lambda value:value),
+            "finish":("PGN final position",lambda value:value.replace(" checkmate · "," / ").replace(" stalemate","")),
+            "clock":("Your clock annotations",lambda value:value.split(" in ",1)[1].replace(" games","")+" games" if " in " in value else value),
+            "elapsed":("Your time per move",lambda value:value.split(" · ",1)[0]),
+        }
+        for key,(measure,shorten) in compact.items():
+            label=self.chesscom_pgn_quick_values[key];entry=figures.get(measure)
+            if entry:
+                full_value,coverage=entry;label.setText(shorten(full_value));label.setToolTip(f"{full_value}\n{coverage}")
+            else:
+                label.setText("—");label.setToolTip("No scanned PGNs in this filter")
+        worker_running=bool(self._pgn_stats_worker and self._pgn_stats_worker.isRunning())
+        self.chesscom_pgn_stats_rescan.setEnabled(bool(self._chesscom_pgn_stats_records) and not worker_running)
+        if worker_running:
+            self.chesscom_pgn_stats_status.setText("Reading saved PGNs for local statistics…")
+        elif summary["valid"]:
+            self.chesscom_pgn_stats_status.setText(
+                f"{summary['valid']:,} valid PGNs in this filter · {summary['pending']:,} awaiting scan · {summary['errors']:,} unreadable")
+        elif summary["total"]:
+            self.chesscom_pgn_stats_status.setText(f"PGN scan pending for {summary['total']:,} games.")
+        else:
+            self.chesscom_pgn_stats_status.setText("Download standard-chess PGNs to calculate these statistics.")
+
+    def _toggle_chesscom_pgn_details(self,visible):
+        self.chesscom_pgn_stats.setVisible(visible)
+        self.chesscom_pgn_details_toggle.setText("Hide breakdown" if visible else "Show breakdown")
 
     def refresh_chesscom_library(self,username):
         if not isinstance(username,str):username=self.chesscom_username.text()
@@ -692,6 +881,14 @@ class ProfileDialog(QDialog):
         selected_games=[game for game in available
                         if (speed_choice=="All time controls" or str(game.get("time_class","")).casefold()==speed_choice.casefold())
                         and in_selected_period(game)]
+        self._chesscom_pgn_stats_records=[game for game in available if game.get("rules") in ("chess","")
+            and game.get("pgn_path")]
+        self._refresh_chesscom_pgn_stats([game for game in selected_games if game.get("rules") in ("chess","")
+                                          and game.get("pgn_path")])
+        if not (self._pgn_stats_worker and self._pgn_stats_worker.isRunning()):
+            pending=[game for game in self._chesscom_pgn_stats_records
+                     if game.get("pgn_stats_version")!=PGN_STATS_VERSION]
+            if pending:self._start_chesscom_pgn_stats_scan(pending)
         self._chesscom_castling_scan_records=[game for game in selected_games
             if not game.get("castling_scanned") and game.get("rules") in ("chess","")
             and game.get("pgn_path") and Path(game["pgn_path"]).is_file()]
@@ -841,7 +1038,7 @@ class ProfileDialog(QDialog):
         self.chesscom_move_accuracy_chart.set_values([(f"Move {number}",sum(values)/len(values),len(values))
             for number,values in sorted(move_accuracy.items())])
         opening_depth_by_id={}
-        openings=getattr(self.parent(),"openings",[])
+        openings=getattr(self._owner_window(),"openings",[])
         if not openings:
             self.chesscom_opening_mastery.setText("Load the Lichess opening database to estimate how many book moves you play before leaving a line.")
         else:
@@ -1337,7 +1534,7 @@ class ProfileDialog(QDialog):
             self.chesscom_status.setText("This game’s PGN was removed. Download the month again to restore it.");return
         if records[0]["rules"] not in ("chess",""):
             self.chesscom_status.setText("This game uses a variant that the current review board does not support.");return
-        self.open_game_callback({"chesscom_game":records[0]});self.accept()
+        self._open_game_and_return({"chesscom_game":records[0]})
 
     def review_selected_chesscom(self):
         records=self._selected_chesscom_records()
@@ -1348,7 +1545,7 @@ class ProfileDialog(QDialog):
                     else "Selected games do not have stored PGN files. Download their month again to restore them.")
             self.chesscom_status.setText(reason);return
         if len(supported)!=len(records):self.chesscom_status.setText(f"Skipping {len(records)-len(supported)} game(s) without a stored standard-chess PGN.")
-        self.open_game_callback({"chesscom_batch":supported});self.accept()
+        self._open_game_and_return({"chesscom_batch":supported})
 
     def review_unreviewed_chesscom(self):
         try:rows=self.store.chesscom_games(self.chesscom_username.text())
@@ -1356,7 +1553,12 @@ class ProfileDialog(QDialog):
         records=[game for game in rows if not game["reviewed"] and game["rules"] in ("chess","")
                  and game["pgn_path"] and Path(game["pgn_path"]).is_file()]
         if not records:self.chesscom_status.setText("There are no downloaded, unreviewed standard-chess games.");return
-        self.open_game_callback({"chesscom_batch":records});self.accept()
+        self._open_game_and_return({"chesscom_batch":records})
+
+    def _open_game_and_return(self,saved_game):
+        self.open_game_callback(saved_game)
+        window=self._owner_window()
+        if window is not None:window.main_tabs.setCurrentIndex(0)
 
     def delete_selected_chesscom(self):
         records=self._selected_chesscom_records()
@@ -1496,7 +1698,7 @@ class ProfileDialog(QDialog):
         pgn=self.records[row]["pgn"]
         if not pgn:
             QMessageBox.information(self,"Summary only","This game’s summary is saved, but its moves weren’t stored. Enable full PGN storage for future games, or export a PGN from the game review.");return
-        self.open_game_callback(self.records[row]);self.accept()
+        self._open_game_and_return(self.records[row])
 
     def delete_selected(self):
         row=self.table.currentRow()
@@ -1515,10 +1717,15 @@ class ProfileDialog(QDialog):
         if answer!=QMessageBox.StandardButton.Yes:return
         self.store.clear_pgns();self.refresh();self.refresh_chesscom_library(self.chesscom_username.text())
 
-    def closeEvent(self,event):
+    def shutdown_background_workers(self):
         if self._chesscom_worker and self._chesscom_worker.isRunning():self._chesscom_worker.cancel()
+        if self._pgn_stats_worker and self._pgn_stats_worker.isRunning():
+            self._pgn_stats_worker.requestInterruption();self._pgn_stats_worker.wait(2000)
         if self._castling_scan_worker and self._castling_scan_worker.isRunning():
             self._castling_scan_worker.requestInterruption();self._castling_scan_worker.wait(2000)
+
+    def closeEvent(self,event):
+        self.shutdown_background_workers()
         super().closeEvent(event)
 
 __all__ = ["ProfileDialog"]

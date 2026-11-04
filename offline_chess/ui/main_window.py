@@ -114,7 +114,7 @@ class ChessWindow(QMainWindow):
         self._opening_load_lock=threading.Lock()
         self.review_token=0; self.sound_enabled = True; self.sounds = {}; self.explorer_dialog=None
         self.review_progress_dialog=None
-        self.puzzle_dialog=None;self.puzzle_token=0
+        self.puzzle_dialog=None;self.profile_page=None;self.profile_tab_placeholder=None;self._installing_profile_page=False;self.puzzle_token=0
         self.rating_eligible=True
         try:self.profile_store=ProfileStore();self.profile_error=None
         except Exception as exc:self.profile_store=None;self.profile_error=str(exc)
@@ -372,6 +372,12 @@ class ChessWindow(QMainWindow):
         self.puzzle_dialog.puzzle_requested.connect(self._request_puzzle)
         self.puzzle_dialog.challenge_high_score_changed.connect(self._update_puzzle_high_score)
         self.main_tabs.addTab(self.puzzle_dialog,"Puzzles")
+        self.profile_tab_placeholder=QWidget();placeholder_layout=QVBoxLayout(self.profile_tab_placeholder)
+        placeholder_layout.addStretch(1);self.profile_placeholder_label=QLabel("Open your profile insights and saved games here.")
+        self.profile_placeholder_label.setObjectName("Muted");self.profile_placeholder_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder_layout.addWidget(self.profile_placeholder_label);placeholder_layout.addStretch(1)
+        self.main_tabs.addTab(self.profile_tab_placeholder,"Profile")
+        self.main_tabs.currentChanged.connect(self._main_tab_changed)
         self.statusBar().showMessage("Offline play · your moves stay on this computer")
         if self.profile_error:self.statusBar().showMessage(f"Profile storage unavailable: {self.profile_error}")
         self.setStyleSheet(self._stylesheet())
@@ -542,9 +548,8 @@ class ChessWindow(QMainWindow):
         if paths and not entries:
             QMessageBox.warning(self,"No openings loaded","The selected TSV files were found, but no valid opening lines could be read.")
         self._update_opening()
-        for widget in QApplication.topLevelWidgets():
-            if isinstance(widget,ProfileDialog):
-                widget.refresh_chesscom_library(widget.chesscom_username.text())
+        if self.profile_page is not None:
+            self.profile_page.refresh_chesscom_library(self.profile_page.chesscom_username.text())
 
     def load_book_dialog(self,dialog_parent=None):
         path,_=QFileDialog.getOpenFileName(dialog_parent or self,"Load a weighted Polyglot opening book",str(APP_DIR),"Polyglot books (*.bin)")
@@ -1536,14 +1541,54 @@ class ChessWindow(QMainWindow):
                 "move_counts":category_counts,"error_themes":themes,
                 "strength_themes":strength_themes}
 
+    def _ensure_profile_page(self):
+        if self.profile_page is not None:return self.profile_page
+        if not self.profile_store:
+            self.profile_placeholder_label.setText("Profile storage is unavailable.")
+            self.statusBar().showMessage(f"Profile storage unavailable: {self.profile_error or ''}",8000)
+            return None
+        placeholder=self.profile_tab_placeholder;index=self.main_tabs.indexOf(placeholder)
+        if index<0:return None
+        page=ProfileDialog(self.profile_store,self.open_saved_game,self.set_board_theme,self.set_board_presentation,self,
+                           sound_changed_callback=self.set_sound,load_opening_callback=self.load_opening_dialog,
+                           load_book_callback=self.load_book_dialog)
+        page.setStyleSheet(self._stylesheet())
+        self._installing_profile_page=True;signals_blocked=self.main_tabs.blockSignals(True)
+        self.main_tabs.removeTab(index);self.main_tabs.insertTab(index,page,"Profile")
+        self.profile_page=page;self.profile_tab_placeholder=None
+        placeholder.deleteLater()
+        self.main_tabs.blockSignals(signals_blocked);self._installing_profile_page=False
+        return page
+
+    def _main_tab_changed(self,index):
+        widget=self.main_tabs.widget(index)
+        if widget is self.profile_tab_placeholder:
+            page=self._ensure_profile_page()
+            if page is not None:self.main_tabs.setCurrentWidget(page)
+        elif widget is self.profile_page and self.profile_page is not None and not self._installing_profile_page:
+            self._schedule_profile_refresh(self.profile_page)
+
+    def _schedule_profile_refresh(self,page):
+        token=page.begin_profile_loading("Refreshing profile…")
+        QTimer.singleShot(0,lambda:self._refresh_profile_page(page,token))
+
+    def _refresh_profile_page(self,page,token):
+        try:
+            if page is self.profile_page and self.main_tabs.currentWidget() is page:
+                page.refresh()
+                page.refresh_chesscom_library(page.chesscom_username.text())
+        finally:page.end_profile_loading(token)
+
     def open_profile(self):
         if not self.profile_store:
             QMessageBox.warning(self,"Profile unavailable",f"Could not open local profile storage.\n\n{self.profile_error or ''}");return
-        dialog=ProfileDialog(self.profile_store,self.open_saved_game,self.set_board_theme,self.set_board_presentation,self,
-                             sound_changed_callback=self.set_sound,load_opening_callback=self.load_opening_dialog,
-                             load_book_callback=self.load_book_dialog)
-        dialog.setStyleSheet(self._stylesheet());dialog.exec();self._saved_game_stats_cache=None
+        page=self._ensure_profile_page()
+        if page is None:return
+        if self.main_tabs.currentWidget() is page:
+            self._schedule_profile_refresh(page)
+        self._saved_game_stats_cache=None
         self.puzzle_dialog.refresh_high_score()
+        self.main_tabs.setCurrentWidget(page)
 
     def set_board_theme(self,theme_key):
         if theme_key not in BOARD_THEMES:return
@@ -1773,6 +1818,8 @@ class ChessWindow(QMainWindow):
         return destination
     def closeEvent(self,event):
         with self._opening_load_lock:self._closing=True
+        profile_page=getattr(self,"profile_page",None)
+        if profile_page is not None:profile_page.shutdown_background_workers()
         if self.review_speech:self.review_speech.stop()
         self.worker.stop_event.set()
         if self.thread.isRunning():
