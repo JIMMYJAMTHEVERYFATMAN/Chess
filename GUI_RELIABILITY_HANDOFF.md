@@ -2,7 +2,7 @@
 
 ## Goal
 
-Complete the GUI reliability and crash-testing audit in `GUI_RELIABILITY_AUDIT.md`, fix reproducible critical/high issues, rerun focused/release tests, then push reviewed local state to `master` and publish v1.1.4. The user explicitly authorized that push and release after audit gates pass; do not publish before those gates pass.
+The GUI reliability audit, fixes, verification, push to `master`, and v1.1.4 publication are complete. This handoff records the finished state and the remaining audit coverage limits in `GUI_RELIABILITY_AUDIT.md`.
 
 ## User decisions and constraints
 
@@ -11,11 +11,11 @@ Complete the GUI reliability and crash-testing audit in `GUI_RELIABILITY_AUDIT.m
 - Position Lab selected-side-only output is intentional.
 - Reject empty/header-only PGNs while preserving the current game.
 - Import the legal prefix of malformed PGN movetext and show an inline warning.
-- The user initially said v1.1.4 contains the re-handoff fixes. Read-only checks found no public tag/release at the start of this continuation. The user then explicitly authorized pushing local state to `master` and releasing v1.1.4 after the audit.
+- The user initially said v1.1.4 contains the re-handoff fixes. Read-only checks found no public tag/release at the start of this continuation. The user then explicitly authorized pushing local state to `master` and releasing v1.1.4 after the audit; this was completed and independently verified.
 - Disposable profile and read-only public requests were approved. Privacy/reporting choices were made by the user; do not change reporting settings or submit telemetry/feedback.
 - The populated GUI profile's isolation is not established. No Chess.com downloads, saved-game reviews, data deletions, or profile-setting changes are authorized. Read-only list inspection and public archive GET requests are authorized.
 - Never delete or alter stored profile data without separate action-time authorization.
-- Do not publish or release until the audit, fixes, tests, report and changelog are reviewable. After those gates pass, push `master`, create/push tag `v1.1.4`, and verify release publication.
+- Release complete: commit `080677eea453e34bcf899a4a532befa3dce4af48` is on `master` and tagged `v1.1.4`; GitHub Actions run [41896637890](https://github.com/JIMMYJAMTHEVERYFATMAN/Chess/actions/runs/41896637890) succeeded; the [v1.1.4 release](https://github.com/JIMMYJAMTHEVERYFATMAN/Chess/releases/tag/v1.1.4) is published with all nine expected assets. No further release action is pending.
 
 ## Current worktree
 
@@ -59,9 +59,11 @@ Fix alternatives and evidence are in `GUI_RELIABILITY_AUDIT.md`; user-facing cha
 
 Read `GUI_RELIABILITY_AUDIT.md` first. It contains the 27-group matrix, live interaction history, architecture/dependency map, optimization benchmarks and alternatives, source/test evidence, and remaining live-UI limits. The user chose to keep valid Elo chart records and show blank Position Lab tables with an explanatory status for terminal positions; both behaviors are implemented and regression-tested. The synthetic library benchmark was 20.7 ms for 131, 78.5 ms for 2,938, and 233.2 ms for 10,000 unreviewed no-PGN games; a profile refactor needs reviewed/PGN-heavy evidence. Avoid profile mutations and downloaded-game opening/review. Temporary-directory PGN export failures have been exercised offscreen; actual ACL-denied paths remain untested.
 
-## Final acceptance
+## Completed acceptance
 
 - Verify all reproducible critical/high defects are fixed or documented with a concrete blocker.
 - Update exact current GUI coverage and distinguish live verification from offscreen-only tests.
-- Tests and local Windows packaging are complete: 150 tests pass and the Windows one-file package builds. Before pushing, run `git diff --check`, inspect the complete staged diff, and confirm the changelog heading/version and workflow asset gates. Then commit to `master`, push `master`, create/push tag `v1.1.4`, and monitor Actions through publication. If repository variables/secrets block a gate, report the exact failure and keep release status incomplete.
-- After publication, verify the v1.1.4 release URL, tag commit, and expected Windows/Linux/license/Stockfish assets through read-only GitHub queries. Do not mark the root task complete until the remote branch and published release are independently verified.
+- `git diff --check` and staged-diff checks passed before release. The changelog/version and workflow asset gates passed.
+- The full local suite passed 150 tests; isolated GUI sweep completed 171 rows (154 OK, 17 intentionally skipped, 0 errors/timeouts); local Windows one-file packaging succeeded.
+- GitHub Actions completed successfully for Windows, Linux amd64, and Linux arm64. The remote `master`, annotated tag, release URL, and nine release assets were independently verified; see the final gate record in `GUI_RELIABILITY_AUDIT.md`.
+- Remaining work is limited to optional live GUI coverage listed in the audit matrix; no known critical/high defect is awaiting a fix. Do not reopen data-mutating checks without fresh authorization.
