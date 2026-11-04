@@ -1,5 +1,11 @@
 # Changelog
 
+## [v1.1.3] - 2026-11-04
+
+### Added
+
+- Chromebook Linux packages for amd64 and arm64.
+
 ## [v1.1.2] - 2026-11-03
 
 ### Added
