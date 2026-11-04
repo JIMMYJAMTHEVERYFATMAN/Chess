@@ -619,7 +619,14 @@ class PositionAnalysisPage(QWidget):
             selected_table.selectRow(0)
             self._select_candidate(selected_table, 0)
         label = "White" if active_color == chess.WHITE else "Black"
-        self.status_label.setText(f"Top moves for {label} are ready.")
+        if selected_table.rowCount():
+            self.status_label.setText(f"Top moves for {label} are ready.")
+        elif self.position.is_checkmate():
+            self.status_label.setText(f"No legal moves for {label}: checkmate.")
+        elif self.position.is_stalemate():
+            self.status_label.setText(f"No legal moves for {label}: stalemate.")
+        else:
+            self.status_label.setText(f"Stockfish returned no legal candidate moves for {label}.")
 
     def _fill_table(self, table: QTableWidget, rows):
         table.setRowCount(len(rows))

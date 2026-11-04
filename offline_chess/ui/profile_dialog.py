@@ -115,7 +115,14 @@ class ProfileDialog(QDialog):
         username=self.chesscom_username.text().strip()
         if not username:return
         self.chesscom_status.setText("Loading Chess.com insights and downloaded games…")
-        QTimer.singleShot(0,lambda:self.refresh_chesscom_library(username))
+        QTimer.singleShot(0,lambda:self._finish_chesscom_initial_load(username))
+
+    def _finish_chesscom_initial_load(self,username):
+        self.refresh_chesscom_library(username)
+        if self.chesscom_status.text()=="Loading Chess.com insights and downloaded games…":
+            count=len(self._chesscom_all_games)
+            noun="game" if count==1 else "games"
+            self.chesscom_status.setText(f"Loaded {count:,} downloaded {noun}.")
 
     def _build_chesscom_page(self):
         scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -885,9 +892,9 @@ class ProfileDialog(QDialog):
             score_change=f"{score-prior_score:+.1f} pp" if score is not None and prior_score is not None else "—"
             accuracy_change=(f"{average_accuracy-prior_average_accuracy:+.1f} pp"
                              if average_accuracy is not None and prior_average_accuracy is not None else "—")
-            score_comparison=f"{score:.1f}% vs {prior_score:.1f}% ({score_change})" if score is not None and prior_score is not None else "score unavailable"
+            score_comparison=f"{score:.1f}% vs {prior_score:.1f}% ({score_change})" if score is not None and prior_score is not None else "unavailable"
             accuracy_comparison=(f"{average_accuracy:.1f}% vs {prior_average_accuracy:.1f}% ({accuracy_change})"
-                                 if average_accuracy is not None and prior_average_accuracy is not None else "accuracy unavailable")
+                                 if average_accuracy is not None and prior_average_accuracy is not None else "unavailable")
             native_accuracy_comparison=(f"Chess.com accuracy {average_native_accuracy:.1f}% vs {prior_average_native:.1f}%"
                                         if average_native_accuracy is not None and prior_average_native is not None
                                         else "Chess.com accuracy unavailable")

@@ -24,7 +24,9 @@ class EngineWorker(QObject):
     failed = pyqtSignal(str)
     bot_move = pyqtSignal(object)
     best_move = pyqtSignal(object)
+    best_move_checked = pyqtSignal(int, str, object)
     position_eval = pyqtSignal(int)
+    position_eval_checked = pyqtSignal(str, int)
     review_progress = pyqtSignal(int, int, int, object)
     review_done = pyqtSignal(int, object, bool)
     practice_analysis_done = pyqtSignal(object)
@@ -49,6 +51,14 @@ class EngineWorker(QObject):
         self.review_cache_limit=384
         self.stop_event = threading.Event()
         self.review_cancel_event = threading.Event()
+
+    def _close_engine(self):
+        if self.engine:
+            try: self.engine.quit()
+            except Exception:
+                try: self.engine.close()
+                except Exception: pass
+        self.engine = None
 
     @pyqtSlot()
     def start_engine(self):
@@ -78,6 +88,7 @@ class EngineWorker(QObject):
             self.ready.emit({"options": self.option_names,"syzygy_active":self.syzygy_active,
                              "syzygy_error":syzygy_error})
         except Exception as exc:
+            self._close_engine()
             self.failed.emit(f"Could not start Stockfish at {STOCKFISH_PATH}: {exc}")
 
     def _apply_syzygy_path(self,path):
@@ -155,12 +166,16 @@ class EngineWorker(QObject):
         except Exception as exc: self.operation_error.emit(f"Bot move failed: {exc}")
 
     @pyqtSlot(object)
-    def find_best(self, board: chess.Board):
+    def find_best(self, task):
         try:
             if not self.engine: raise RuntimeError("Stockfish has not started")
+            game_version, board = task if isinstance(task, tuple) else (None, task)
             info = self.engine.analyse(board, chess.engine.Limit(time=.8))
             pv = info.get("pv", [])
-            self.best_move.emit(pv[0] if pv else None)
+            move=pv[0] if pv else None
+            self.best_move.emit(move)
+            if game_version is not None:
+                self.best_move_checked.emit(game_version,board.fen(),move)
         except Exception as exc: self.operation_error.emit(f"Best move failed: {exc}")
 
     @pyqtSlot(object)
@@ -168,7 +183,9 @@ class EngineWorker(QObject):
         try:
             if self.engine:
                 info = self.engine.analyse(board, chess.engine.Limit(time=.12))
-                self.position_eval.emit(eval_cp(info["score"]))
+                score=eval_cp(info["score"])
+                self.position_eval.emit(score)
+                self.position_eval_checked.emit(board.fen(),score)
         except Exception as exc: self.operation_error.emit(f"Position evaluation failed: {exc}")
 
     @pyqtSlot(object)
@@ -1037,12 +1054,7 @@ class EngineWorker(QObject):
 
     @pyqtSlot()
     def shutdown(self):
-        if self.engine:
-            try: self.engine.quit()
-            except Exception:
-                try: self.engine.close()
-                except Exception: pass
-            self.engine = None
+        self._close_engine()
         QThread.currentThread().quit()
 
 __all__ = ["EngineWorker"]

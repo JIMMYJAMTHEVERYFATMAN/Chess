@@ -15,8 +15,8 @@ os.environ.setdefault("QT_QPA_PLATFORM","offscreen")
 try:
     import chess
     from PyQt6 import sip
-    from PyQt6.QtCore import QEvent, QObject, Qt, pyqtSignal
-    from PyQt6.QtGui import QImage, QKeyEvent, QPainter
+    from PyQt6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, Qt, pyqtSignal
+    from PyQt6.QtGui import QImage, QKeyEvent, QMouseEvent, QPainter
     from main import (
         analyze_review_events,
         removed_defender_event,
@@ -151,6 +151,108 @@ class ReviewAnalysisTests(unittest.TestCase):
                 error_dialog.assert_called_once()
                 self.assertIn(error_text.lower(),error_dialog.call_args.args[2].lower())
 
+    def test_new_game_reset_clears_play_move_table(self):
+        from PyQt6.QtWidgets import QTableWidget
+        app=QApplication.instance() or QApplication([])
+        move_table=QTableWidget(1,3);review_table=QTableWidget(1,5)
+        target=SimpleNamespace(
+            review_token=0,worker=SimpleNamespace(review_cancel_event=threading.Event()),review_busy=False,
+            review_btn=MagicMock(),analysis_level=MagicMock(),_update_syzygy_button=MagicMock(),
+            external_review_game_id=None,external_review_username=None,external_review_players={},
+            external_review_ratings={},external_review_clocks=[],chesscom_review_queue=[],
+            chesscom_batch_total=0,chesscom_batch_completed=0,game_version=0,
+            game_start_board=chess.Board(),board=chess.Board(),history=[chess.Move.from_uci("e2e4")],
+            review_moves=[MagicMock()],reviewing=False,review_index=1,last_move=chess.Move.from_uci("e2e4"),
+            best_move=None,selected=None,game_result_override=None,bot_busy=False,rating_eligible=True,
+            move_table=move_table,review_table=review_table,progress=MagicMock(),
+            _reset_review_surfaces=MagicMock(),evalbar=MagicMock(),best_view_btn=MagicMock(),
+            _update_player_labels=MagicMock(),turn_label=MagicMock(),player_color=chess.WHITE,
+            _sync_board=MagicMock(),_update_opening=MagicMock(),engine_ready=False,
+            statusBar=lambda:MagicMock(),
+        )
+
+        MainWindowUi.reset(target)
+
+        self.assertEqual(target.history,[])
+        self.assertEqual(target.move_table.rowCount(),0)
+        self.assertEqual(target.review_table.rowCount(),0)
+
+    def test_cancel_review_requests_stop_and_updates_progress_message(self):
+        cancel_event=threading.Event()
+        target=SimpleNamespace(
+            review_busy=True,worker=SimpleNamespace(review_cancel_event=cancel_event),
+            review_progress_dialog=SimpleNamespace(status=MagicMock()),
+        )
+
+        MainWindowUi.cancel_review(target)
+
+        self.assertTrue(cancel_event.is_set())
+        target.review_progress_dialog.status.setText.assert_called_once_with(
+            "Stopping after the current position; completed analysis will be kept.")
+
+    def test_review_worker_emits_cancelled_when_stop_requested_before_first_move(self):
+        cancel_event=threading.Event();cancel_event.set()
+        worker=SimpleNamespace(
+            engine=object(),review_cancel_event=cancel_event,stop_event=threading.Event(),
+            option_names=set(),review_cache={},review_cache_limit=4,
+            syzygy_active=False,syzygy_path="",review_done=MagicMock(),
+            operation_error=MagicMock(),
+        )
+
+        EngineWorker.review_game(worker,(17,chess.Board(),[chess.Move.from_uci("e2e4")],None,.1))
+
+        worker.review_done.emit.assert_called_once_with(17,[],True)
+        worker.operation_error.emit.assert_not_called()
+
+    def test_engine_startup_failure_emits_a_recoverable_error(self):
+        worker=EngineWorker();errors=[];worker.failed.connect(errors.append)
+        with patch("offline_chess.engine_worker.chess.engine.SimpleEngine.popen_uci",
+                   side_effect=OSError("engine missing")):
+            worker.start_engine()
+        self.assertEqual(len(errors),1)
+        self.assertIn("Could not start Stockfish",errors[0])
+        self.assertIn("engine missing",errors[0])
+        self.assertIsNone(worker.engine)
+
+    def test_engine_startup_configuration_failure_closes_partial_process(self):
+        worker=EngineWorker();errors=[];worker.failed.connect(errors.append)
+        engine=MagicMock();engine.options={"UCI_LimitStrength":None}
+        engine.configure.side_effect=OSError("configuration failed")
+        with patch("offline_chess.engine_worker.chess.engine.SimpleEngine.popen_uci",return_value=engine):
+            worker.start_engine()
+        self.assertEqual(len(errors),1)
+        self.assertIn("configuration failed",errors[0])
+        engine.quit.assert_called_once_with()
+        self.assertIsNone(worker.engine)
+
+    def test_engine_shutdown_falls_back_to_close_and_clears_engine_reference(self):
+        worker=EngineWorker();engine=MagicMock();engine.quit.side_effect=OSError("quit failed")
+        worker.engine=engine
+        worker.shutdown()
+        engine.quit.assert_called_once_with()
+        engine.close.assert_called_once_with()
+        self.assertIsNone(worker.engine)
+
+    def test_pgn_exports_report_unwritable_destination_without_changing_game(self):
+        board=chess.Board();board.push_san("e4")
+        history=list(board.move_stack)
+        with tempfile.TemporaryDirectory(dir=os.getcwd()) as folder:
+            for export_method,review_moves in ((MainWindowUi.export_pgn,[]),
+                                               (MainWindowUi.export_review_pgn,[MagicMock()])):
+                with self.subTest(export_method=export_method.__name__):
+                    target=SimpleNamespace(
+                        history=history,board=board,review_moves=review_moves,
+                        game_result_override=None,player_color=chess.WHITE,
+                        statusBar=lambda:MagicMock(),
+                        _current_pgn_text=MagicMock(return_value="1. e4 *"),
+                    )
+                    with patch.object(main_window_module.QFileDialog,"getSaveFileName",return_value=(folder,"")), \
+                         patch.object(main_window_module.QMessageBox,"critical") as error_dialog:
+                        export_method(target)
+                    self.assertEqual(target.history,history)
+                    self.assertEqual(target.board.fen(),board.fen())
+                    error_dialog.assert_called_once()
+
     def test_import_pgn_rejects_invalid_utf8_with_clear_message_and_preserves_game(self):
         with tempfile.TemporaryDirectory(dir=os.getcwd()) as folder:
             path=Path(folder)/"invalid-encoding.pgn"
@@ -240,6 +342,59 @@ class ReviewAnalysisTests(unittest.TestCase):
         finally:painter.end()
         self.assertEqual(image.pixelColor(40,40).alpha(),255)
 
+    def test_chess_board_click_coordinates_follow_resize_and_flip(self):
+        app=QApplication.instance() or QApplication([])
+        board=ChessBoard()
+        for width,height,flipped,expected in (
+            (640,640,False,chess.A8),(720,560,False,chess.A8),
+            (560,720,False,chess.A8),(720,560,True,chess.H1),
+        ):
+            with self.subTest(size=(width,height),flipped=flipped):
+                board.resize(width,height);board.flipped=flipped
+                size=min(width,height);x=(width-size)/2+size/16;y=(height-size)/2+size/16
+                clicked=[];board.square_clicked.connect(clicked.append)
+                event=QMouseEvent(QEvent.Type.MouseButtonPress,QPointF(x,y),Qt.MouseButton.LeftButton,
+                                  Qt.MouseButton.LeftButton,Qt.KeyboardModifier.NoModifier)
+                board.mousePressEvent(event)
+                self.assertEqual(clicked[-1],expected)
+                board.square_clicked.disconnect(clicked.append)
+
+    def test_promotion_defaults_to_queen_for_white_and_black(self):
+        for fen,from_square,to_square,color in (
+            ("7k/P7/8/8/8/8/8/7K w - - 0 1",chess.A7,chess.A8,chess.WHITE),
+            ("7k/8/8/8/8/8/p7/7K b - - 0 1",chess.A2,chess.A1,chess.BLACK),
+        ):
+            with self.subTest(color=color):
+                target=SimpleNamespace(
+                    reviewing=False,bot_busy=False,board=chess.Board(fen),player_color=color,
+                    selected=from_square,_game_finished=lambda:False,
+                    _push=MagicMock(),_after_move=MagicMock(),_sync_board=MagicMock(),
+                )
+                ChessWindow.on_square(target,to_square)
+                move=target._push.call_args.args[0]
+                self.assertEqual(move.promotion,chess.QUEEN)
+
+    def test_minimum_window_width_keeps_board_and_side_panel_inside(self):
+        app=QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory(dir=os.getcwd()) as profile:
+            with patch.dict(os.environ,{"LOCALAPPDATA":profile}), \
+                 patch.object(EngineWorker,"start_engine",lambda _self:None), \
+                 patch.object(ChessWindow,"_begin_usage_reporting",lambda _self:None):
+                window=ChessWindow();window.show();app.processEvents()
+                try:
+                    for width,height in ((1100,760),(1280,800),(1600,900)):
+                        with self.subTest(size=(width,height)):
+                            window.resize(width,height);app.processEvents()
+                            central=window.centralWidget();rects=[]
+                            for widget in (window.board_widget,window.mode_stack.parentWidget()):
+                                rects.append(QRect(widget.mapTo(central,QPoint(0,0)),widget.size()))
+                            board,panel=rects
+                            self.assertTrue(all(central.rect().contains(rect) for rect in rects))
+                            self.assertFalse(board.intersects(panel))
+                            self.assertGreaterEqual(board.width(),360)
+                finally:
+                    window.close();window.thread.wait(3000)
+
     def test_position_analysis_uses_one_deadline_bound_multipv_search_for_selected_side(self):
         class TimedAnalysis:
             def __init__(self,lines):
@@ -298,6 +453,49 @@ class ReviewAnalysisTests(unittest.TestCase):
         self.assertEqual(requests[0][2],2)
         self.assertFalse(page.black_to_move.isEnabled())
 
+    def test_position_lab_terminal_results_explain_checkmate_and_stalemate(self):
+        cases=(
+            ("7k/6Q1/6K1/8/8/8/8/8 b - - 0 1","checkmate"),
+            ("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1","stalemate"),
+        )
+        app=QApplication.instance() or QApplication([])
+        for fen,reason in cases:
+            with self.subTest(reason=reason):
+                page=PositionAnalysisPage();board=chess.Board(fen)
+                page.position=board;page._sync_editor_state();page._request_token=1
+                page._analyzing=True;page.set_engine_ready(True)
+                color_label="White" if board.turn==chess.WHITE else "Black"
+                page.apply_results({"token":1,"fen":fen,"color":board.turn,
+                                    "results":{color_label:[]},"error":""})
+                self.assertEqual(page._table_for_color(board.turn).rowCount(),0)
+                self.assertEqual(page.status_label.text(),f"No legal moves for {color_label}: {reason}.")
+
+    def test_position_lab_empty_engine_results_explain_missing_candidates(self):
+        app=QApplication.instance() or QApplication([])
+        page=PositionAnalysisPage();board=chess.Board()
+        page._request_token=1;page._analyzing=True;page.set_engine_ready(True)
+
+        page.apply_results({"token":1,"fen":board.fen(),"color":chess.WHITE,
+                            "results":{"White":[]},"error":""})
+
+        self.assertEqual(page.white_table.rowCount(),0)
+        self.assertEqual(page.status_label.text(),"Stockfish returned no legal candidate moves for White.")
+
+    def test_elo_chart_skips_malformed_ratings_and_renders_valid_history(self):
+        from PyQt6.QtGui import QImage
+        from offline_chess.ui.charts import EloHistoryChart
+        app=QApplication.instance() or QApplication([])
+        chart=EloHistoryChart([("first",1200),("nan",float("nan")),("last",1300),
+                               ("infinite",float("inf")),("text","bad")])
+
+        self.assertEqual(chart.values,[("first",1200),("last",1300)])
+        chart.resize(420,170);image=QImage(420,170,QImage.Format.Format_ARGB32)
+        chart.render(image)
+        chart.set_values([("nan",float("nan"))])
+        empty=QImage(420,170,QImage.Format.Format_ARGB32);chart.render(empty)
+        self.assertEqual(chart.values,[])
+        self.assertTrue(chart._had_invalid_values)
+
     def test_preindexed_opening_lookups_match_uncached_results(self):
         board=chess.Board()
         moves=[]
@@ -342,6 +540,98 @@ class ReviewAnalysisTests(unittest.TestCase):
 
         _harness,status=play_bot_reply(game_ends=True)
         self.assertEqual(status.message,"Game over")
+
+    def test_stale_bot_reply_does_not_clear_busy_state_for_new_game(self):
+        old_board=chess.Board();old_board.push_san("e4")
+        current_board=chess.Board();current_board.push_san("d4")
+        harness=SimpleNamespace(board=current_board,game_version=2,bot_busy=True)
+
+        MainWindowUi._bot_move(harness,(1,old_board.fen(),chess.Move.from_uci("e7e5")))
+
+        self.assertTrue(harness.bot_busy)
+
+    def test_stale_best_move_and_evaluation_do_not_update_new_position(self):
+        old_board=chess.Board();old_board.push_san("e4")
+        current_board=chess.Board();current_board.push_san("d4")
+        applied=[]
+        harness=SimpleNamespace(game_version=2,board=current_board,best_move=None,
+                                _sync_board=lambda:applied.append("best"),
+                                statusBar=lambda:SimpleNamespace(showMessage=lambda *_args:None),
+                                evalbar=SimpleNamespace(set_eval=lambda value:applied.append(value)))
+        harness._best_move=lambda move:(setattr(harness,"best_move",move),applied.append("best"))
+
+        MainWindowUi._best_move_checked(harness,1,old_board.fen(),chess.Move.from_uci("e7e5"))
+        MainWindowUi._position_eval_checked(harness,old_board.fen(),125)
+
+        self.assertIsNone(harness.best_move)
+        self.assertEqual(applied,[])
+
+        current_move=current_board.parse_san("d5")
+        MainWindowUi._best_move_checked(harness,2,current_board.fen(),current_move)
+        MainWindowUi._position_eval_checked(harness,current_board.fen(),50)
+        self.assertEqual(harness.best_move,current_move)
+        self.assertEqual(applied,["best",50])
+
+    def test_engine_result_signals_keep_legacy_values_and_add_position_context(self):
+        class FakeEngine:
+            def analyse(self,board,_limit):
+                return {"pv":[next(iter(board.legal_moves))],
+                        "score":chess.engine.PovScore(chess.engine.Cp(42),chess.WHITE)}
+
+        worker=EngineWorker();worker.engine=FakeEngine()
+        best=[];best_checked=[];evaluation=[];evaluation_checked=[]
+        worker.best_move.connect(best.append);worker.best_move_checked.connect(lambda *args:best_checked.append(args))
+        worker.position_eval.connect(evaluation.append)
+        worker.position_eval_checked.connect(lambda *args:evaluation_checked.append(args))
+        board=chess.Board()
+
+        worker.find_best((7,board))
+        worker.evaluate_position(board)
+
+        self.assertEqual(best,[best_checked[0][2]])
+        self.assertEqual(best_checked[0][:2],(7,board.fen()))
+        self.assertEqual(evaluation,[42])
+        self.assertEqual(evaluation_checked,[(board.fen(),42)])
+
+    def test_window_defers_close_if_engine_thread_is_still_running(self):
+        class Signal:
+            def __init__(self):self.slots=[];self.emissions=0
+            def connect(self,slot):self.slots.append(slot)
+            def emit(self):
+                self.emissions+=1
+                for slot in self.slots:slot()
+        class Thread:
+            def __init__(self):self.running=True;self.wait_result=False;self.finished=Signal();self.wait_calls=[]
+            def isRunning(self):return self.running
+            def wait(self,timeout):self.wait_calls.append(timeout);return self.wait_result
+        class Event:
+            def __init__(self):self.accepted=False;self.ignored=False
+            def accept(self):self.accepted=True
+            def ignore(self):self.ignored=True
+
+        thread=Thread();shutdown=Signal();closed=[];status=SimpleNamespace(showMessage=MagicMock())
+        harness=SimpleNamespace(
+            _opening_load_lock=threading.Lock(),_closing=False,review_speech=None,
+            worker=SimpleNamespace(stop_event=threading.Event()),shutdown_request=shutdown,thread=thread,
+            _shutdown_requested=False,_close_when_engine_stops=False,
+            statusBar=lambda:status,close=lambda:closed.append(True),
+        )
+        first_event=Event()
+
+        MainWindowUi.closeEvent(harness,first_event)
+
+        self.assertTrue(first_event.ignored)
+        self.assertFalse(first_event.accepted)
+        self.assertTrue(harness.worker.stop_event.is_set())
+        self.assertEqual(shutdown.emissions,1)
+        self.assertEqual(thread.wait_calls,[2500])
+        self.assertEqual(thread.finished.slots,[harness.close])
+        status.showMessage.assert_called_once()
+
+        second_event=Event();thread.wait_result=True
+        MainWindowUi.closeEvent(harness,second_event)
+        self.assertTrue(second_event.accepted)
+        self.assertEqual(shutdown.emissions,1)
 
     def test_opening_loader_does_not_emit_after_window_close(self):
         app=QApplication.instance() or QApplication([])
@@ -445,6 +735,55 @@ class ReviewAnalysisTests(unittest.TestCase):
             "https://api.chess.com/pub/player/player1/games/archives",*archives])
         self.assertEqual([month for month,_ in downloaded],archives)
         self.assertEqual(finished,[True])
+
+    def test_chesscom_archive_worker_returns_an_empty_archive_list(self):
+        with patch("main.chesscom_request_json",return_value={"archives":[]}) as request:
+            worker=ChessComFetchWorker("archives","player1")
+            archives=[];failures=[]
+            worker.archives_ready.connect(archives.append);worker.failed.connect(failures.append)
+            worker.run()
+        self.assertEqual(archives,[[]])
+        self.assertEqual(failures,[])
+        request.assert_called_once_with("https://api.chess.com/pub/player/player1/games/archives")
+
+    def test_chesscom_archive_worker_surfaces_request_failures(self):
+        def fail(_url):raise OSError("offline")
+        with patch("main.chesscom_request_json",side_effect=fail):
+            worker=ChessComFetchWorker("archives","player1")
+            archives=[];failures=[]
+            worker.archives_ready.connect(archives.append);worker.failed.connect(failures.append)
+            worker.run()
+        self.assertEqual(archives,[])
+        self.assertEqual(failures,["offline"])
+
+    def test_chesscom_archive_worker_cancel_stops_after_the_current_month(self):
+        urls=["https://api.chess.com/pub/player/player1/games/2026/09",
+              "https://api.chess.com/pub/player/player1/games/2026/10"]
+        requested=[]
+        def request(url):
+            requested.append(url)
+            return {"archives":urls} if url.endswith("/games/archives") else {"games":[{"id":url[-2:]}]}
+        with patch("main.chesscom_request_json",side_effect=request):
+            worker=ChessComFetchWorker("all","player1")
+            downloaded=[];finished=[]
+            worker.month_downloaded.connect(lambda month,games:downloaded.append((month,games)))
+            worker.progress.connect(lambda current,_total:worker.cancel() if current==1 else None)
+            worker.all_finished.connect(lambda:finished.append(True))
+            worker.run()
+        self.assertEqual(requested,[f"https://api.chess.com/pub/player/player1/games/archives",urls[0]])
+        self.assertEqual([month for month,_games in downloaded],[urls[0]])
+        self.assertEqual(finished,[True])
+
+    def test_profile_archive_empty_and_failure_states_are_visible(self):
+        month=MagicMock();month.count.return_value=0
+        empty_target=SimpleNamespace(chesscom_month=month,chesscom_status=MagicMock())
+        ProfileDialog._chesscom_archives_loaded(empty_target,[])
+        empty_target.chesscom_month.clear.assert_called_once_with()
+        empty_target.chesscom_status.setText.assert_called_once_with(
+            "No monthly archives were found for this username.")
+        failed_target=SimpleNamespace(chesscom_status=MagicMock())
+        ProfileDialog._chesscom_fetch_failed(failed_target,"Public archive lookup failed")
+        failed_target.chesscom_status.setText.assert_called_once_with("Public archive lookup failed")
 
     def test_chesscom_request_retries_a_transient_connection_reset(self):
         response=MagicMock()
@@ -618,6 +957,61 @@ class ReviewAnalysisTests(unittest.TestCase):
             finally:
                 if previous is None:os.environ.pop("LOCALAPPDATA",None)
                 else:os.environ["LOCALAPPDATA"]=previous
+
+    def test_chesscom_initial_load_clears_loading_status_without_clobbering_operation_status(self):
+        app=QApplication.instance() or QApplication([])
+        previous=os.environ.get("LOCALAPPDATA")
+        with tempfile.TemporaryDirectory(dir=os.getcwd()) as data_dir:
+            with patch.dict(os.environ,{"LOCALAPPDATA":data_dir,"XDG_DATA_HOME":data_dir}):
+                store=ProfileStore()
+                dialog=ProfileDialog(store,lambda _game:None)
+                dialog.chesscom_username.setText("player1")
+                index=dialog.tabs.indexOf(dialog.chesscom_scroll)
+                dialog._load_chesscom_on_tab(index)
+                self.assertEqual(dialog.chesscom_status.text(),
+                                 "Loading Chess.com insights and downloaded games…")
+                app.processEvents()
+                self.assertEqual(dialog.chesscom_status.text(),"Loaded 0 downloaded games.")
+                game={"url":"https://www.chess.com/game/live/profile-ui","end_time":1793450000,
+                      "rated":True,"time_control":"600+5","time_class":"rapid","rules":"chess",
+                      "pgn":"[Event \"Online\"]\n[White \"player1\"]\n[Black \"opponent\"]\n\n1. e4 e5 *\n",
+                      "white":{"username":"player1","rating":1500,"result":"win"},
+                      "black":{"username":"opponent","rating":1480,"result":"checkmated"}}
+                store.save_chesscom_game("player1",game)
+                dialog.chesscom_status.setText("Loading Chess.com insights and downloaded games…")
+                dialog._finish_chesscom_initial_load("player1")
+                self.assertEqual(dialog.chesscom_status.text(),"Loaded 1 downloaded game.")
+                dialog.chesscom_status.setText("Looking up public archives…")
+                dialog._finish_chesscom_initial_load("player1")
+                self.assertEqual(dialog.chesscom_status.text(),"Looking up public archives…")
+                dialog.close();dialog.deleteLater();app.processEvents()
+        if previous is None:os.environ.pop("LOCALAPPDATA",None)
+        else:os.environ["LOCALAPPDATA"]=previous
+
+    def test_chesscom_period_comparison_does_not_duplicate_accuracy_fallback_label(self):
+        app=QApplication.instance() or QApplication([])
+        previous=os.environ.get("LOCALAPPDATA")
+        with tempfile.TemporaryDirectory(dir=os.getcwd()) as data_dir:
+            with patch.dict(os.environ,{"LOCALAPPDATA":data_dir,"XDG_DATA_HOME":data_dir}):
+                store=ProfileStore();now=int(time.time())
+                base={"rated":True,"time_control":"600+5","time_class":"rapid","rules":"chess",
+                      "pgn":"[Event \"Online\"]\n[White \"player1\"]\n[Black \"opponent\"]\n\n1. e4 e5 *\n",
+                      "white":{"username":"player1","rating":1500,"result":"win"},
+                      "black":{"username":"opponent","rating":1480,"result":"checkmated"}}
+                for suffix,age in (("current",1),("previous",8)):
+                    game=dict(base,url=f"https://www.chess.com/game/live/{suffix}",end_time=now-age*86400)
+                    store.save_chesscom_game("player1",game)
+                dialog=ProfileDialog(store,lambda _game:None)
+                dialog.chesscom_username.setText("player1")
+                dialog.chesscom_date_filter.setCurrentText("Last 7 days")
+                comparison=dialog.chesscom_period_comparison.text()
+                self.assertIn("score unavailable",comparison)
+                self.assertIn("local review accuracy unavailable",comparison)
+                self.assertNotIn("score score unavailable",comparison)
+                self.assertNotIn("accuracy accuracy unavailable",comparison)
+                dialog.close();dialog.deleteLater();app.processEvents()
+        if previous is None:os.environ.pop("LOCALAPPDATA",None)
+        else:os.environ["LOCALAPPDATA"]=previous
 
     def test_profile_store_migrates_existing_database_for_cached_reviews(self):
         previous=os.environ.get("LOCALAPPDATA")

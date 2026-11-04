@@ -110,7 +110,8 @@ class ChessWindow(QMainWindow):
         self.game_result_override: Optional[str] = None
         self.game_version = 0
         self.openings: list[Opening] = []; self.opening_position_index = {}; self.book_path: Optional[str] = None
-        self._closing=False;self._opening_load_lock=threading.Lock()
+        self._closing=False;self._shutdown_requested=False;self._close_when_engine_stops=False
+        self._opening_load_lock=threading.Lock()
         self.review_token=0; self.sound_enabled = True; self.sounds = {}; self.explorer_dialog=None
         self.review_progress_dialog=None
         self.puzzle_dialog=None;self.puzzle_token=0
@@ -138,7 +139,6 @@ class ChessWindow(QMainWindow):
         ChessBoard.default_animations=self.board_animations
         self._setup_ui(); self._setup_engine()
         self.openings_loaded.connect(self._set_openings)
-        self.worker.position_eval.connect(self.evalbar.set_eval)
         self.evaluation_request.connect(self.worker.evaluate_position)
         self._load_default_openings(); self._sync_board()
         QTimer.singleShot(800,self._begin_usage_reporting)
@@ -239,7 +239,8 @@ class ChessWindow(QMainWindow):
         self.syzygy_request.connect(self.worker.configure_syzygy)
         self.shutdown_request.connect(self.worker.shutdown)
         self.worker.ready.connect(self._engine_started); self.worker.failed.connect(self._engine_failed)
-        self.worker.bot_move.connect(self._bot_move); self.worker.best_move.connect(self._best_move)
+        self.worker.bot_move.connect(self._bot_move); self.worker.best_move_checked.connect(self._best_move_checked)
+        self.worker.position_eval_checked.connect(self._position_eval_checked)
         self.worker.review_progress.connect(self._review_progress); self.worker.review_done.connect(self._review_done)
         self.worker.explore_done.connect(self._explorer_done)
         self.worker.position_analysis_done.connect(self.position_lab.apply_results)
@@ -278,7 +279,9 @@ class ChessWindow(QMainWindow):
         play_col.addWidget(self.opponent)
         board_row=QHBoxLayout(); board_row.setSpacing(8); play_col.addLayout(board_row,1)
         self.evalbar=EvalBar(); board_row.addWidget(self.evalbar)
-        self.board_widget=ChessBoard(); self.board_widget.square_clicked.connect(self.on_square); board_row.addWidget(self.board_widget,1)
+        self.board_widget=ChessBoard()
+        self.board_widget.setMinimumWidth(360)  # Fit the board beside the side panel at the window's minimum width.
+        self.board_widget.square_clicked.connect(self.on_square); board_row.addWidget(self.board_widget,1)
         self.you=QFrame(); self.you.setObjectName("PlayerCard"); yourow=QHBoxLayout(self.you);yourow.setContentsMargins(20,14,20,14)
         av=QLabel("♙"); av.setObjectName("Avatar"); yourow.addWidget(av)
         youinfo=QVBoxLayout(); self.you_name=QLabel("You · White"); self.you_name.setObjectName("PlayerName"); self.turn_label=QLabel("Your turn"); self.turn_label.setObjectName("Muted"); youinfo.addWidget(self.you_name); youinfo.addWidget(self.turn_label); yourow.addLayout(youinfo); yourow.addStretch()
@@ -747,15 +750,20 @@ class ChessWindow(QMainWindow):
         if self.board.turn!=self.player_color and self.engine_ready:
             self.bot_busy=True; self.statusBar().showMessage("Stockfish is thinking…"); self.bot_request.emit((self.game_version,self.board.copy()))
     def _bot_move(self,result):
-        self.bot_busy=False
         version,position,move=result
         if version!=self.game_version or position!=self.board.fen():return
+        self.bot_busy=False
         if move and move in self.board.legal_moves and not self._game_finished():
             self._push(move); self._after_move()
             if self.board.turn==self.player_color and not self._game_finished():self.statusBar().clearMessage()
     def request_best(self):
         if not self.engine_ready or self._game_finished() or self.reviewing:return
-        self.statusBar().showMessage("Finding the best move…"); self.best_request.emit(self.board.copy())
+        self.statusBar().showMessage("Finding the best move…"); self.best_request.emit((self.game_version,self.board.copy()))
+    def _best_move_checked(self,version,position,move):
+        if version!=self.game_version or position!=self.board.fen():return
+        self._best_move(move)
+    def _position_eval_checked(self,position,score):
+        if position==self.board.fen():self.evalbar.set_eval(score)
     def _best_move(self,move):
         self.best_move=move; self._sync_board(); self.statusBar().showMessage("Best move marked on the board",4000)
 
@@ -1661,7 +1669,7 @@ class ChessWindow(QMainWindow):
         self.external_review_game_id=None;self.external_review_username=None;self.external_review_players={};self.external_review_ratings={};self.external_review_clocks=[]
         self.chesscom_review_queue.clear();self.chesscom_batch_total=0;self.chesscom_batch_completed=0
         self.game_version+=1; self.game_start_board=chess.Board();self.board=self.game_start_board.copy(); self.history=[]; self.review_moves=[]; self.reviewing=False; self.review_index=0; self.last_move=None; self.best_move=None; self.selected=None; self.game_result_override=None; self.bot_busy=False; self.rating_eligible=True
-        self.review_table.setRowCount(0); self.progress.setValue(0); self._reset_review_surfaces("Run a review to compare both sides and find the game’s turning points."); self.evalbar.set_eval(0)
+        self.move_table.setRowCount(0); self.review_table.setRowCount(0); self.progress.setValue(0); self._reset_review_surfaces("Run a review to compare both sides and find the game’s turning points."); self.evalbar.set_eval(0)
         self.best_view_btn.setChecked(False)
         self._update_player_labels(); self.turn_label.setText("Your turn · " + ("White" if self.player_color else "Black")); self._sync_board(); self._update_opening(); self.statusBar().showMessage("New game started")
         if self.engine_ready and self.board.turn!=self.player_color:self._after_move()
@@ -1761,8 +1769,18 @@ class ChessWindow(QMainWindow):
         with self._opening_load_lock:self._closing=True
         if self.review_speech:self.review_speech.stop()
         self.worker.stop_event.set()
-        self.shutdown_request.emit()
-        self.thread.wait(2500)
+        if self.thread.isRunning():
+            if not self._shutdown_requested:
+                self._shutdown_requested=True
+                self.shutdown_request.emit()
+            if not self.thread.wait(2500):
+                if not self._close_when_engine_stops:
+                    self._close_when_engine_stops=True
+                    self.thread.finished.connect(self.close)
+                self.statusBar().showMessage("Stockfish is still stopping; the window will close when it finishes.")
+                event.ignore()
+                if not self.thread.isRunning():QTimer.singleShot(0,self.close)
+                return
         event.accept()
 
 __all__ = ["ChessWindow"]

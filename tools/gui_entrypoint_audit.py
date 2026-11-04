@@ -120,8 +120,17 @@ rows.append({"group": "Game window", "entry_point": "Chessboard", "action": "pla
              "end_to_end_ms": f"{reply_ms:.1f}" if reply_ms is not None else "timeout",
              "status": "ok" if reply_ms is not None and legal else "error",
              "details": f"user move legal={legal}; plies after response={len(window.history)}"})
+before_reset_image = window.board_widget.grab().toImage()
 window.reset()
 pump(app, 30)
+after_reset_image = window.board_widget.grab().toImage()
+reset_render_ok = (window.board.fen() == chess.STARTING_FEN
+                   and window.board_widget.board.fen() == chess.STARTING_FEN
+                   and before_reset_image != after_reset_image
+                   and window.move_table.rowCount() == 0)
+rows.append({"group": "Game actions", "entry_point": "New game", "action": "reset after synthetic two-ply engine game",
+             "ui_response_ms": "", "end_to_end_ms": "", "status": "ok" if reset_render_ok else "error",
+             "details": f"model reset={window.board.fen()==chess.STARTING_FEN}; widget reset={window.board_widget.board.fen()==chess.STARTING_FEN}; rendered board changed={before_reset_image!=after_reset_image}; move rows={window.move_table.rowCount()}"})
 
 # Exercise every top-level tab and every visible main-window button in each
 # reachable mode. Current-state hidden/disabled controls are counted below.
@@ -271,6 +280,36 @@ exported = Path(_profile.name) / "export.pgn"
 if exported.is_file():
     parsed = chess.pgn.read_game(exported.open(encoding="utf-8"))
     rows[-1]["details"] = f"exported={exported.stat().st_size} bytes; reparsed={parsed is not None}; result={parsed.headers.get('Result') if parsed else ''}"
+
+# Cancel a local review after its first reported ply. This runs only against a
+# synthetic game and the temporary profile above; incomplete reviews are not saved.
+game = chess.pgn.Game()
+board = chess.Board()
+node = game
+for san in ("e4", "e5", "Nf3", "Nc6", "Bb5", "a6", "Ba4", "Nf6"):
+    move = board.parse_san(san)
+    node = node.add_variation(move)
+    board.push(move)
+fixture.write_text(str(game), encoding="utf-8")
+main_window_module.QFileDialog.getOpenFileName = staticmethod(lambda *args, **kwargs: (str(fixture), "PGN"))
+record("Review workflow", "Import synthetic review game", "load eight-ply fixture", window.import_pgn)
+window.analysis_level.setCurrentIndex(0)
+review_start = time.perf_counter()
+window.start_review()
+first_review_ply_ms = wait_until(lambda: bool(window.review_moves), 15)
+if first_review_ply_ms is not None:
+    window.cancel_review()
+review_cancel_ms = wait_until(lambda: not window.review_busy, 15) if first_review_ply_ms is not None else None
+review_ok = (review_cancel_ms is not None and 0 < len(window.review_moves) < len(window.history)
+             and window.review_progress_dialog is None and window.analysis_level.isEnabled()
+             and window.review_btn.text() == "Review Game"
+             and window.statusBar().currentMessage().startswith("Review cancelled"))
+rows.append({"group": "Review workflow", "entry_point": "Review progress dialog",
+             "action": "cancel after first completed synthetic ply",
+             "ui_response_ms": f"{(time.perf_counter()-review_start)*1000:.1f}",
+             "end_to_end_ms": f"{review_cancel_ms:.1f}" if review_cancel_ms is not None else "timeout",
+             "status": "ok" if review_ok else "error",
+             "details": f"first progress observed={first_review_ply_ms is not None}; partial plies={len(window.review_moves)} of {len(window.history)}; dialog closed={window.review_progress_dialog is None}; analysis controls restored={window.analysis_level.isEnabled()}; status={window.statusBar().currentMessage()}"})
 
 # Close cleanly while the opening loader is finished and worker is still alive.
 window.close()

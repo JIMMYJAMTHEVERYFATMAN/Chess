@@ -33,14 +33,26 @@ class AccuracyChart(QWidget):
 
 class EloHistoryChart(QWidget):
     def __init__(self,values=None,parent=None):
-        super().__init__(parent);self.values=list(values or []);self.setMinimumHeight(170);self.setMouseTracking(True);self.setToolTip("Chess.com rating after each downloaded game, in date order.")
-    def set_values(self,values):self.values=list(values or []);self.update()
+        super().__init__(parent);self.values=[];self._had_invalid_values=False;self.setMinimumHeight(170);self.setMouseTracking(True);self.setToolTip("Chess.com rating after each downloaded game, in date order.")
+        self.set_values(values)
+    def set_values(self,values):
+        self.values=list(values or []);self._had_invalid_values=False
+        for index,item in enumerate(self.values):
+            try:date=item[0];rating=int(item[1])
+            except (IndexError,KeyError,TypeError,ValueError,OverflowError):
+                self._had_invalid_values=True;self.values[index]=None
+            else:
+                if not isinstance(item[1],int):self.values[index]=(date,rating)
+        if self._had_invalid_values:self.values=[item for item in self.values if item is not None]
+        self.update()
     def paintEvent(self,_event):
         p=QPainter(self);p.setRenderHint(QPainter.RenderHint.Antialiasing);p.fillRect(self.rect(),QColor("#202426"))
         area=self.rect().adjusted(54,14,-16,-28);p.setFont(QFont("Arial",9));p.setPen(QColor("#8f999e"))
         if not self.values:
-            p.drawText(area,Qt.AlignmentFlag.AlignCenter,"Download rated games to build your Chess.com rating history.");return
-        ratings=[int(item[1]) for item in self.values];low=(min(ratings)//100)*100;high=((max(ratings)+99)//100)*100
+            message=("No valid Chess.com rating data is available." if self._had_invalid_values
+                     else "Download rated games to build your Chess.com rating history.")
+            p.drawText(area,Qt.AlignmentFlag.AlignCenter,message);return
+        ratings=[item[1] for item in self.values];low=(min(ratings)//100)*100;high=((max(ratings)+99)//100)*100
         if high<=low:low-=100;high+=100
         else:low=max(0,low-50);high+=50
         for value in range(low,high+1,max(100,math.ceil((high-low)/4/100)*100)):
