@@ -83,6 +83,7 @@ try:
     from offline_chess.engine_worker import _choose_sub_1320_candidate
     from offline_chess.ui.main_window import ChessWindow as MainWindowUi
     from offline_chess.ui.position_lab import PositionAnalysisPage
+    from offline_chess.ui.endgame_trainer import EndgameTrainerPage
     from offline_chess.openings import detect_opening, find_opening_ply, index_openings, opening_from_file
     TEST_IMPORT_ERROR=None
 except (ImportError,SystemExit) as exc:
@@ -116,6 +117,50 @@ class ReviewAnalysisTests(unittest.TestCase):
     def _restore_xdg_data_home(self):
         if self._previous_xdg_data_home is None:os.environ.pop("XDG_DATA_HOME",None)
         else:os.environ["XDG_DATA_HOME"]=self._previous_xdg_data_home
+
+    def test_endgame_random_positions_are_legal_for_both_sides(self):
+        app=QApplication.instance() or QApplication([])
+        trainer=EndgameTrainerPage()
+        for color in (chess.WHITE,chess.BLACK):
+            for kind in ("Queen vs king","Rook vs king","Pawn ending"):
+                for _ in range(5):
+                    board=trainer.random_position(kind,color)
+                    self.assertTrue(trainer._validate_endgame(board)[0],board.fen())
+                    non_kings=[piece for piece in board.piece_map().values() if piece.piece_type!=chess.KING]
+                    self.assertTrue(non_kings)
+
+    def test_game_review_starts_endgame_trainer_from_game_position(self):
+        app=QApplication.instance() or QApplication([])
+        trainer=EndgameTrainerPage()
+        start=chess.Board("4k3/8/8/8/8/8/4R3/4K3 w - - 0 1")
+        move=start.parse_san("Re7+")
+        selected=[]
+        host=SimpleNamespace(game_start_board=start,history=[move],endgame_trainer=trainer,
+                             player_color=chess.WHITE,main_tabs=SimpleNamespace(setCurrentWidget=selected.append))
+        MainWindowUi.practice_game_endgame(host)
+        expected=start.copy();expected.push(move)
+        self.assertEqual(selected,[trainer])
+        self.assertEqual(trainer.challenge_board.fen(),expected.fen())
+        self.assertEqual(trainer.user_color,chess.WHITE)
+        self.assertTrue(trainer.challenge_active)
+
+    def test_endgame_engine_reply_applies_only_to_current_challenge(self):
+        app=QApplication.instance() or QApplication([])
+        trainer=EndgameTrainerPage()
+        trainer.engine_ready=True
+        requests=[]
+        trainer.move_requested.connect(requests.append)
+        board=trainer.random_position("Rook vs king",chess.WHITE)
+        trainer._start_challenge(board,chess.WHITE)
+        move=next(iter(trainer.challenge_board.legal_moves))
+        trainer._push_move(move)
+        token,engine_board,elo=requests[-1]
+        self.assertEqual(elo,1000)
+        engine_move=next(iter(engine_board.legal_moves))
+        trainer.apply_engine_move({"token":token-1,"fen":engine_board.fen(),"move":engine_move.uci(),"error":""})
+        self.assertEqual(trainer.challenge_board.move_stack[-1],move)
+        trainer.apply_engine_move({"token":token,"fen":engine_board.fen(),"move":engine_move.uci(),"error":""})
+        self.assertEqual(trainer.challenge_board.move_stack[-1],engine_move)
 
     def test_sub_1320_policy_mixes_human_calibration_smoothly_across_rating_range(self):
         board=chess.Board()

@@ -6,6 +6,9 @@ The **Position Lab** tab accepts a FEN and shows Stockfish's top three candidate
 
 The **Opening Trainer** tab teaches White and Black repertoire lines from the bundled Lichess opening catalog. Choose an opening and one of its lines to drill your moves while learning the opponent's replies. Saved Chess.com games show your opening results and let you jump into your most-played or lowest-win-rate openings.
 
+The **Endgame Trainer** lets you build an endgame with the board editor or generate a random queen, rook, or pawn ending, then play for checkmate against Stockfish with a selectable Elo.
+From Game Review, choose **Practice this game’s endgame** to continue from a position found in the reviewed game.
+
 The **Puzzles** tab offers engine focused tactics, total random puzzles, training based on downloaded Chess.com games and review weaknesses, forced mate challenges, and an escalating challenge run. Each puzzle has three lives. The challenge high score is saved in the local profile and shown in Profile.
 
 ## Run the app

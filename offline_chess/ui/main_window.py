@@ -60,6 +60,7 @@ from .profile_dialog import ProfileDialog
 from .review_dialogs import *
 from .position_lab import PositionAnalysisPage
 from .opening_trainer import OpeningTrainerPage
+from .endgame_trainer import EndgameTrainerPage
 from .theme import *
 
 def _unparsed_pgn_token(text):
@@ -94,6 +95,7 @@ class ChessWindow(QMainWindow):
     explore_request = pyqtSignal(object)
     position_analysis_request = pyqtSignal(object)
     puzzle_request = pyqtSignal(object)
+    endgame_move_request = pyqtSignal(object)
     syzygy_request = pyqtSignal(str)
 
     def __init__(self):
@@ -242,6 +244,7 @@ class ChessWindow(QMainWindow):
         self.explore_request.connect(self.worker.explore)
         self.position_analysis_request.connect(self.worker.analyze_position)
         self.puzzle_request.connect(self.worker.generate_puzzle)
+        self.endgame_move_request.connect(self.worker.choose_endgame_move)
         self.syzygy_request.connect(self.worker.configure_syzygy)
         self.shutdown_request.connect(self.worker.shutdown)
         self.worker.ready.connect(self._engine_started); self.worker.failed.connect(self._engine_failed)
@@ -250,6 +253,7 @@ class ChessWindow(QMainWindow):
         self.worker.review_progress.connect(self._review_progress); self.worker.review_done.connect(self._review_done)
         self.worker.explore_done.connect(self._explorer_done)
         self.worker.position_analysis_done.connect(self.position_lab.apply_results)
+        self.worker.endgame_move_done.connect(self.endgame_trainer.apply_engine_move)
         self.worker.puzzle_progress.connect(self._puzzle_progress);self.worker.puzzle_done.connect(self._puzzle_done)
         self.worker.operation_error.connect(self._engine_error)
         self.worker.syzygy_status.connect(self._syzygy_configured)
@@ -342,6 +346,7 @@ class ChessWindow(QMainWindow):
         self.detail=QLabel("Play a game or import a PGN, then choose Review Game for a move-by-move breakdown.");self.detail.setObjectName("ReviewLesson");self.detail.setWordWrap(True);self.detail.setAlignment(Qt.AlignmentFlag.AlignTop);detail_col.addWidget(self.detail)
         self.detail_prompt=QLabel("");self.detail_prompt.setObjectName("CoachPrompt");self.detail_prompt.setWordWrap(True);self.detail_prompt.hide();detail_col.addWidget(self.detail_prompt)
         self.retry_move_btn=self._button("Try this position","secondary");self.retry_move_btn.clicked.connect(self.practice_current_mistake);self.retry_move_btn.setVisible(False);detail_col.addWidget(self.retry_move_btn)
+        self.practice_endgame_btn=self._button("Practice this game’s endgame","primary");self.practice_endgame_btn.setToolTip("Open the earliest legal queenless endgame position from this game in Endgame Trainer.");self.practice_endgame_btn.clicked.connect(self.practice_game_endgame);self.practice_endgame_btn.setEnabled(False);detail_col.addWidget(self.practice_endgame_btn)
         self.detail_line=QLabel("");self.detail_line.setObjectName("Muted");self.detail_line.setWordWrap(True);detail_col.addWidget(self.detail_line)
         self.detail_scroll=QScrollArea();self.detail_scroll.setWidgetResizable(True);self.detail_scroll.setMinimumHeight(175);self.detail_scroll.setWidget(detail_card);review_col.addWidget(self.detail_scroll)
         nav=QHBoxLayout();self.prev_btn=self._button("‹","secondary");self.prev_btn.setToolTip("Previous move matching the selected filters (Left Arrow)");self.prev_btn.clicked.connect(lambda:self.navigate(-1));nav.addWidget(self.prev_btn)
@@ -372,6 +377,9 @@ class ChessWindow(QMainWindow):
         self.position_lab=PositionAnalysisPage()
         self.position_lab.analysis_requested.connect(self.position_analysis_request.emit)
         self.main_tabs.addTab(self.position_lab,"Position Lab")
+        self.endgame_trainer=EndgameTrainerPage()
+        self.endgame_trainer.move_requested.connect(self.endgame_move_request.emit)
+        self.main_tabs.addTab(self.endgame_trainer,"Endgame Trainer")
         self.opening_trainer=OpeningTrainerPage(self.profile_store)
         self.opening_trainer.set_openings(self.openings)
         self.main_tabs.addTab(self.opening_trainer,"Opening Trainer")
@@ -576,6 +584,7 @@ class ChessWindow(QMainWindow):
         self.engine_startup_timer.stop();self.engine_startup_timed_out=False
         self.engine_ready=True; self.engine_status.setText("Stockfish 19 · ready"); self.engine_status.setStyleSheet("color:#91ca9c")
         self.position_lab.set_engine_ready(True)
+        self.endgame_trainer.set_engine_ready(True)
         self.puzzle_dialog.set_engine_ready(True)
         self.syzygy_supported="SyzygyPath" in info.get("options",set())
         self.syzygy_active=bool(info.get("syzygy_active",False))
@@ -647,6 +656,7 @@ class ChessWindow(QMainWindow):
         self.engine_startup_timer.stop()
         self.engine_status.setText("Stockfish unavailable"); self.engine_status.setStyleSheet("color:#e28b76")
         self.position_lab.set_engine_error(message)
+        self.endgame_trainer.set_engine_ready(False, message)
         self.puzzle_dialog.set_engine_ready(False)
         self.puzzle_dialog.status.setText(f"Stockfish is unavailable: {message}")
         self.syzygy_supported=False;self._update_syzygy_button()
@@ -1102,8 +1112,9 @@ class ChessWindow(QMainWindow):
             self.detail_verdict.setText("READY");self.detail_verdict.setStyleSheet("")
             self.detail_move.setText("Choose a reviewed move")
             self.detail_metrics.setText("Move quality, evaluation and engine alternatives will appear here.")
-            self.detail.setText("Review this game to see the best move, evaluation change, explanation, and principal variation.");self.detail_prompt.clear();self.detail_prompt.hide();self.detail_line.setText("");self.pv_step_btn.setEnabled(False);self.reply_pv_step_btn.setEnabled(False);self.retry_move_btn.setVisible(False);self.reply_view_btn.setEnabled(False);return
+            self.detail.setText("Review this game to see the best move, evaluation change, explanation, and principal variation.");self.detail_prompt.clear();self.detail_prompt.hide();self.detail_line.setText("");self.pv_step_btn.setEnabled(False);self.reply_pv_step_btn.setEnabled(False);self.retry_move_btn.setVisible(False);self.practice_endgame_btn.setEnabled(False);self.reply_view_btn.setEnabled(False);return
         item=self.review_moves[self.review_index-1]
+        self.practice_endgame_btn.setEnabled(bool(self.history))
         if self.speak_review_btn.isChecked():self._speak_review_item(item)
         self.retry_move_btn.setVisible(True)
         user_side="White" if self.player_color==chess.WHITE else "Black"
@@ -1448,7 +1459,7 @@ class ChessWindow(QMainWindow):
         self._last_spoken_ply=None
         if self.speak_review_btn.isChecked():self.speak_review_btn.setChecked(False)
         self.review_summary.setText(message);self.review_metric_white.metric.setText("—");self.review_metric_black.metric.setText("—");self.review_metric_turning.metric.setText("—")
-        self.detail_verdict.setText("READY");self.detail_verdict.setStyleSheet("");self.detail_move.setText("Choose a reviewed move");self.retry_move_btn.setVisible(False)
+        self.detail_verdict.setText("READY");self.detail_verdict.setStyleSheet("");self.detail_move.setText("Choose a reviewed move");self.retry_move_btn.setVisible(False);self.practice_endgame_btn.setEnabled(False)
         self.detail_metrics.setText("Move quality, evaluation and engine alternatives will appear here.");self.detail.setText(message);self.detail_prompt.clear();self.detail_prompt.hide();self.detail_line.setText("");self.pv_step_btn.setEnabled(False);self.reply_pv_step_btn.setEnabled(False);self.reply_view_btn.setEnabled(False);self.export_review_btn.setEnabled(False)
         self.coach_overview.setText("Finish a game and run review to get a focused lesson plan.")
         self.coach_goal.setText("Next focus: complete a game for personalised feedback.")
@@ -1632,6 +1643,31 @@ class ChessWindow(QMainWindow):
             if page is not None:self.main_tabs.setCurrentWidget(page)
         elif widget is self.profile_page and self.profile_page is not None and not self._installing_profile_page:
             self._schedule_profile_refresh(self.profile_page)
+
+    def practice_game_endgame(self):
+        board=self.game_start_board.copy(stack=False)
+        candidates=[]
+        for ply in range(len(self.history)+1):
+            pieces=board.piece_map().values()
+            if (len(board.piece_map())<=16
+                    and (len(board.piece_map())<=7 or not any(piece.piece_type==chess.QUEEN for piece in pieces))
+                    and self.endgame_trainer._validate_endgame(board)[0]):
+                candidates.append(board.copy(stack=False))
+            if ply<len(self.history):
+                move=self.history[ply]
+                if move not in board.legal_moves:break
+                board.push(move)
+        if not candidates:
+            QMessageBox.information(self,"No endgame position found",
+                "This game has no legal queenless position with sixteen or fewer pieces to practice. "
+                "You can still set up or generate an endgame in the Endgame Trainer tab.")
+            return
+        position=candidates[0]
+        started,message=self.endgame_trainer.start_from_game_position(position,self.player_color)
+        if not started:
+            QMessageBox.information(self,"Endgame position unavailable",message)
+            return
+        self.main_tabs.setCurrentWidget(self.endgame_trainer)
 
     def _schedule_profile_refresh(self,page):
         token=page.begin_profile_loading("Refreshing profile…")

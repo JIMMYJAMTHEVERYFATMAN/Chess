@@ -197,6 +197,8 @@ jobs:
               --title $env:RELEASE_TAG --notes-file $notesPath
           }
 
+  # The Windows release job runs the full unit suite; Linux validates each
+  # packaged architecture with its GUI smoke test below.
   linux-build:
     name: Build Chromebook Linux package (${{ matrix.deb_arch }})
     permissions:
@@ -282,14 +284,6 @@ jobs:
           echo "OFFLINE_CHESS_BUILD_PYTHON=$build_venv/bin/python" >> "$GITHUB_ENV"
           if [[ "${{ matrix.deb_arch }}" == "arm64" ]]; then
             echo "MAMBA_ENV=$build_venv" >> "$GITHUB_ENV"
-          fi
-
-      - name: Run test suite
-        run: |
-          if [[ "${{ matrix.deb_arch }}" == "arm64" ]]; then
-            micromamba run -p "$MAMBA_ENV" python -m unittest test_review_analysis test_telemetry test_release_hardening -q
-          else
-            "$OFFLINE_CHESS_BUILD_PYTHON" -m unittest test_review_analysis test_telemetry test_release_hardening -q
           fi
 
       - name: Configure public check-in collector URL

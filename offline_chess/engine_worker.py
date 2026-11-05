@@ -63,6 +63,7 @@ class EngineWorker(QObject):
     position_analysis_done = pyqtSignal(object)
     puzzle_progress = pyqtSignal(int, int, int)
     puzzle_done = pyqtSignal(int, object, str)
+    endgame_move_done = pyqtSignal(object)
     operation_error = pyqtSignal(str)
     syzygy_status = pyqtSignal(str, str, bool)
 
@@ -199,6 +200,50 @@ class EngineWorker(QObject):
             if game_version is not None:
                 self.best_move_checked.emit(game_version,board.fen(),move)
         except Exception as exc: self.operation_error.emit(f"Best move failed: {exc}")
+
+    @pyqtSlot(object)
+    def choose_endgame_move(self, task):
+        """Choose a difficulty-adjusted reply for an isolated endgame trainer board."""
+        token, board, target_elo = task
+        restore = {}
+        try:
+            if not self.engine:
+                raise RuntimeError("Stockfish has not started")
+            target_elo = max(MIN_TARGET_ELO, min(MAX_ELO, int(target_elo)))
+            options = {}
+            if "UCI_LimitStrength" in self.option_names:
+                restore["UCI_LimitStrength"] = True
+                options["UCI_LimitStrength"] = True
+            if "UCI_Elo" in self.option_names:
+                restore["UCI_Elo"] = max(self._uci_elo_min, min(self._uci_elo_max, self._elo))
+                options["UCI_Elo"] = max(self._uci_elo_min, min(self._uci_elo_max, target_elo))
+            if "Skill Level" in self.option_names:
+                option = self.engine.options["Skill Level"]
+                skill = 0 if target_elo < MIN_ELO else round((target_elo - MIN_ELO) / (MAX_ELO - MIN_ELO) * 20)
+                restore["Skill Level"] = max(int(option.min or 0), min(int(option.max or 20),
+                    0 if self._elo < MIN_ELO else round((self._elo - MIN_ELO) / (MAX_ELO - MIN_ELO) * 20)))
+                options["Skill Level"] = max(int(option.min or 0), min(int(option.max or 20), skill))
+            if options:
+                self.engine.configure(options)
+            seconds = .35 if target_elo < 2000 else .65
+            if target_elo < MIN_ELO and "MultiPV" in self.option_names:
+                candidates = self.engine.analyse(board, chess.engine.Limit(time=seconds),
+                                                 multipv=self._bot_multipv_max)
+                move = _choose_sub_1320_candidate(board, candidates, target_elo)
+                if move is None:
+                    move = self.engine.play(board, chess.engine.Limit(time=seconds)).move
+            else:
+                move = self.engine.play(board, chess.engine.Limit(time=seconds)).move
+            self.endgame_move_done.emit({"token": token, "fen": board.fen(),
+                                         "move": move.uci() if move else "", "error": ""})
+        except Exception as exc:
+            self.endgame_move_done.emit({"token": token, "fen": board.fen(), "move": "", "error": str(exc)})
+        finally:
+            if restore and self.engine:
+                try:
+                    self.engine.configure(restore)
+                except Exception as exc:
+                    self.operation_error.emit(f"Could not restore engine strength after endgame move: {exc}")
 
     @pyqtSlot(object)
     def evaluate_position(self, board: chess.Board):

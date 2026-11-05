@@ -1,5 +1,12 @@
 # Changelog
 
+## [v2.1.0.0] - 2026-11-05
+
+### Added
+
+- Endgame Trainer with a Position Lab-style piece editor, FEN setup, random queen, rook, and pawn endgames, and checkmate challenges against Stockfish at a selectable Elo.
+- Game Review can send a legal queenless endgame position from the reviewed game into Endgame Trainer for a rematch against Stockfish.
+
 ## [v2.0.0.1] - 2026-11-05
 
 ### Added
