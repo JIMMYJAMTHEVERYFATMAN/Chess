@@ -1631,7 +1631,8 @@ class ChessWindow(QMainWindow):
         if index<0:return None
         page=ProfileDialog(self.profile_store,self.open_saved_game,self.set_board_theme,self.set_board_presentation,self,
                            sound_changed_callback=self.set_sound,load_opening_callback=self.load_opening_dialog,
-                           load_book_callback=self.load_book_dialog,language_changed_callback=self.set_language)
+                           load_book_callback=self.load_book_dialog,language_changed_callback=getattr(self,"set_language",None),
+                           defer_initial_load=hasattr(self,"_tab_loading_token"))
         page.setStyleSheet(self._stylesheet())
         self._installing_profile_page=True;signals_blocked=self.main_tabs.blockSignals(True)
         self.main_tabs.removeTab(index);self.main_tabs.insertTab(index,page,"Profile")
@@ -1647,6 +1648,12 @@ class ChessWindow(QMainWindow):
         self.language_controller.set_language(language)
 
     def _main_tab_changed(self,index):
+        if not hasattr(self,"_tab_loading_token"):
+            widget=self.main_tabs.widget(index)
+            if widget is self.profile_tab_placeholder:
+                page=self._ensure_profile_page()
+                if page is not None:self.main_tabs.setCurrentWidget(page)
+            return
         self._tab_loading_token+=1
         token=self._tab_loading_token
         widget=self.main_tabs.widget(index)
@@ -1734,7 +1741,7 @@ class ChessWindow(QMainWindow):
     def _refresh_profile_page(self,page,token):
         try:
             if page is self.profile_page and self.main_tabs.currentWidget() is page:
-                page.refresh()
+                page.refresh_async()
         finally:page.end_profile_loading(token)
 
     def open_profile(self):
