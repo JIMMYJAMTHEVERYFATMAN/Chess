@@ -1636,8 +1636,9 @@ class ChessWindow(QMainWindow):
 
     def _main_tab_changed(self,index):
         widget=self.main_tabs.widget(index)
-        if widget is self.opening_trainer:
-            self.opening_trainer.refresh()
+        opening_trainer=getattr(self,"opening_trainer",None)
+        if widget is opening_trainer and opening_trainer is not None:
+            opening_trainer.refresh()
         elif widget is self.profile_tab_placeholder:
             page=self._ensure_profile_page()
             if page is not None:self.main_tabs.setCurrentWidget(page)
