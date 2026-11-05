@@ -32,6 +32,32 @@ from .feedback_dialog import FeedbackDialog
 from .review_dialogs import *
 from .theme import *
 
+
+class _ProfileSnapshotWorker(QThread):
+    loaded=pyqtSignal(int,object,int)
+
+    def __init__(self,store,generation,parent=None):
+        super().__init__(parent);self.store=store;self.generation=generation
+
+    def run(self):
+        try:records=self.store.games()
+        except Exception:records=[]
+        try:high_score=max(0,int(self.store.get_setting("puzzle_challenge_high_score","0") or 0))
+        except Exception:high_score=0
+        self.loaded.emit(self.generation,records,high_score)
+
+
+class _ChesscomGamesWorker(QThread):
+    loaded=pyqtSignal(int,object)
+
+    def __init__(self,store,username,generation,parent=None):
+        super().__init__(parent);self.store=store;self.username=username;self.generation=generation
+
+    def run(self):
+        try:games=self.store.chesscom_games(self.username)
+        except Exception:games=[]
+        self.loaded.emit(self.generation,games)
+
 class ResponsiveTableGrid(QWidget):
     """Lay related summary tables out in up to three equal-width panels."""
     def __init__(self,parent=None):
@@ -65,8 +91,11 @@ class ResponsiveTableGrid(QWidget):
 
 class ProfileDialog(QWidget):
     def __init__(self,store,open_game_callback,theme_changed_callback=None,presentation_changed_callback=None,parent=None,
-                 sound_changed_callback=None,load_opening_callback=None,load_book_callback=None):
+                 sound_changed_callback=None,load_opening_callback=None,load_book_callback=None,
+                 language_changed_callback=None):
         super().__init__(parent);self.store=store;self.open_game_callback=open_game_callback;self.theme_changed_callback=theme_changed_callback;self.presentation_changed_callback=presentation_changed_callback
+        self._profile_refresh_generation=0;self._profile_refresh_worker=None;self._profile_refresh_pending=False
+        self._chesscom_games_generation=0;self._chesscom_games_worker=None;self._chesscom_games_pending=None
         root_layout=QVBoxLayout(self);self.tabs=QTabWidget();root_layout.addWidget(self.tabs)
         self._profile_loading_tasks={};self._build_loading_overlay()
         overview_page=QWidget();layout=QVBoxLayout(overview_page);self.tabs.addTab(overview_page,"Overview")
@@ -113,7 +142,7 @@ class ProfileDialog(QWidget):
         self.open_btn=QPushButton("Open saved game");self.open_btn.clicked.connect(self.open_selected);settings.addWidget(self.open_btn)
         self.delete_selected_btn=QPushButton("Delete selected game");self.delete_selected_btn.clicked.connect(self.delete_selected);settings.addWidget(self.delete_selected_btn)
         self.clear_btn=QPushButton("Delete stored PGNs");self.clear_btn.clicked.connect(self.clear_pgn_data);settings.addWidget(self.clear_btn);layout.addLayout(settings)
-        self._build_settings_page(sound_changed_callback,load_opening_callback,load_book_callback)
+        self._build_settings_page(sound_changed_callback,load_opening_callback,load_book_callback,language_changed_callback)
         self._build_chesscom_page()
         self.tabs.currentChanged.connect(self._profile_page_changed)
         self.refresh()
@@ -179,7 +208,7 @@ class ProfileDialog(QWidget):
         if hasattr(self,"profile_loading_overlay"):
             self.profile_loading_overlay.setGeometry(self.tabs.rect())
 
-    def _build_settings_page(self,sound_changed_callback,load_opening_callback,load_book_callback):
+    def _build_settings_page(self,sound_changed_callback,load_opening_callback,load_book_callback,language_changed_callback=None):
         scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setFrameShape(QFrame.Shape.NoFrame)
         page=QWidget();layout=QVBoxLayout(page);layout.setContentsMargins(20,18,20,18);layout.setSpacing(14)
         title=QLabel("SETTINGS");title.setObjectName("SectionTitle");layout.addWidget(title)
@@ -191,6 +220,17 @@ class ProfileDialog(QWidget):
         layout.addWidget(self.sound_toggle)
         sound_note=QLabel("Play short sound cues for moves, captures, checks, castling, and game results.")
         sound_note.setObjectName("Muted");sound_note.setWordWrap(True);layout.addWidget(sound_note)
+
+        language_title=QLabel("LANGUAGE");language_title.setObjectName("SectionTitle");layout.addWidget(language_title)
+        self.czech_language_toggle=QCheckBox("Čeština (Czech language)")
+        self.czech_language_toggle.setChecked(self.store.get_setting("language","en").lower() in ("cs","cz"))
+        if language_changed_callback:
+            self.czech_language_toggle.toggled.connect(lambda enabled:language_changed_callback("cs" if enabled else "en"))
+        else:
+            self.czech_language_toggle.toggled.connect(lambda enabled:self.store.set_setting("language","cs" if enabled else "en"))
+        layout.addWidget(self.czech_language_toggle)
+        language_note=QLabel("Changes the app interface between English and Czech and is saved on this computer.")
+        language_note.setObjectName("Muted");language_note.setWordWrap(True);layout.addWidget(language_note)
 
         database_title=QLabel("LOCAL DATABASES");database_title.setObjectName("SectionTitle");layout.addWidget(database_title)
         database_row=QHBoxLayout()
@@ -282,19 +322,10 @@ class ProfileDialog(QWidget):
         username=self.chesscom_username.text().strip()
         if not username:return
         self.chesscom_status.setText("Loading Chess.com insights and downloaded games…")
-        self._chesscom_initial_loading_token=self.begin_profile_loading("Loading Chess.com…")
-        QTimer.singleShot(0,lambda:self._finish_chesscom_initial_load(username))
+        self.refresh_chesscom_library(username)
 
     def _finish_chesscom_initial_load(self,username):
-        try:
-            self.refresh_chesscom_library(username)
-            if self.chesscom_status.text()=="Loading Chess.com insights and downloaded games…":
-                count=len(self._chesscom_all_games)
-                noun="game" if count==1 else "games"
-                self.chesscom_status.setText(f"Loaded {count:,} downloaded {noun}.")
-        finally:
-            self.end_profile_loading(getattr(self,"_chesscom_initial_loading_token",None))
-            self._chesscom_initial_loading_token=None
+        self.refresh_chesscom_library(username)
 
     def _build_chesscom_page(self):
         scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -904,8 +935,33 @@ class ProfileDialog(QWidget):
 
     def refresh_chesscom_library(self,username):
         if not isinstance(username,str):username=self.chesscom_username.text()
-        try:games=self.store.chesscom_games(username)
-        except ValueError:games=[]
+        if self._chesscom_games_worker and self._chesscom_games_worker.isRunning():
+            self._chesscom_games_pending=username
+            return
+        self._chesscom_games_generation+=1
+        generation=self._chesscom_games_generation
+        self._chesscom_games_loading_token=self.begin_profile_loading("Loading Chess.com games…")
+        worker=_ChesscomGamesWorker(self.store,username,generation,self);self._chesscom_games_worker=worker
+        worker.loaded.connect(self._chesscom_games_loaded)
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(self._chesscom_games_worker_finished)
+        worker.start()
+
+    def _chesscom_games_loaded(self,generation,games):
+        if generation!=self._chesscom_games_generation:return
+        self._apply_chesscom_library(games)
+        if self.chesscom_status.text()=="Loading Chess.com insights and downloaded games…":
+            count=len(games);noun="game" if count==1 else "games"
+            self.chesscom_status.setText(f"Loaded {count:,} downloaded {noun}.")
+        self.end_profile_loading(getattr(self,"_chesscom_games_loading_token",None))
+
+    def _chesscom_games_worker_finished(self):
+        self._chesscom_games_worker=None
+        if self._chesscom_games_pending is not None:
+            username=self._chesscom_games_pending;self._chesscom_games_pending=None
+            self.refresh_chesscom_library(username)
+
+    def _apply_chesscom_library(self,games):
         self.chesscom_library.setRowCount(0);self.chesscom_openings.setRowCount(0)
         self.chesscom_opening_results_chart.set_values([]);self.chesscom_opening_accuracy_chart.set_values([])
         self.chesscom_controls.setRowCount(0);self.chesscom_colors.setRowCount(0)
@@ -1639,9 +1695,31 @@ class ProfileDialog(QWidget):
         if self.presentation_changed_callback:self.presentation_changed_callback(piece_style,coordinates,animations)
 
     def refresh(self):
-        self.all_records=self.store.games()
-        try:puzzle_high_score=max(0,int(self.store.get_setting("puzzle_challenge_high_score","0") or 0))
-        except (TypeError,ValueError):puzzle_high_score=0
+        if self._profile_refresh_worker and self._profile_refresh_worker.isRunning():
+            self._profile_refresh_pending=True
+            return
+        self._profile_refresh_generation+=1
+        generation=self._profile_refresh_generation
+        self._profile_refresh_loading_token=self.begin_profile_loading("Refreshing profile…")
+        worker=_ProfileSnapshotWorker(self.store,generation,self);self._profile_refresh_worker=worker
+        worker.loaded.connect(self._profile_snapshot_loaded)
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(self._profile_snapshot_worker_finished)
+        worker.start()
+
+    def _profile_snapshot_loaded(self,generation,records,puzzle_high_score):
+        if generation!=self._profile_refresh_generation:return
+        self._apply_profile_snapshot(records,puzzle_high_score)
+        self.end_profile_loading(getattr(self,"_profile_refresh_loading_token",None))
+
+    def _profile_snapshot_worker_finished(self):
+        self._profile_refresh_worker=None
+        if self._profile_refresh_pending:
+            self._profile_refresh_pending=False
+            self.refresh()
+
+    def _apply_profile_snapshot(self,all_records,puzzle_high_score):
+        self.all_records=all_records
         self.puzzle_high_score.setText(f"Puzzle challenge high score: {puzzle_high_score} puzzles")
         stats_by_game={}
         for game in self.all_records:
@@ -1773,6 +1851,8 @@ class ProfileDialog(QWidget):
 
     def shutdown_background_workers(self):
         if self._chesscom_worker and self._chesscom_worker.isRunning():self._chesscom_worker.cancel()
+        for worker in (self._profile_refresh_worker,self._chesscom_games_worker):
+            if worker and worker.isRunning():worker.wait(2000)
         if self._pgn_stats_worker and self._pgn_stats_worker.isRunning():
             self._pgn_stats_worker.requestInterruption();self._pgn_stats_worker.wait(2000)
         if self._castling_scan_worker and self._castling_scan_worker.isRunning():

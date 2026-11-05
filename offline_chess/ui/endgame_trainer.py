@@ -23,6 +23,8 @@ class EndgameTrainerPage(QWidget):
         super().__init__(parent)
         self.editor_position = chess.Board(None)
         self.challenge_board = None
+        self.challenge_start_board = None
+        self.challenge_start_user_color = chess.WHITE
         self.user_color = chess.WHITE
         self.selected_square = None
         self.engine_thinking = False
@@ -331,6 +333,8 @@ class EndgameTrainerPage(QWidget):
     def _start_challenge(self, board, user_color):
         self.challenge_token += 1
         self.challenge_board = board.copy(stack=False)
+        self.challenge_start_board = board.copy(stack=False)
+        self.challenge_start_user_color = user_color
         self.user_color = user_color
         self.selected_square = None
         self.last_move = None
@@ -422,17 +426,34 @@ class EndgameTrainerPage(QWidget):
             winner = not board.turn
             self.challenge_active = False
             self.engine_thinking = False
-            self._set_status("You checkmated Stockfish. Challenge won!" if winner == self.user_color else "Stockfish checkmated you. Challenge lost.")
+            if winner == self.user_color:
+                self._set_status("You checkmated Stockfish. Challenge won!")
+            else:
+                self._set_status("Stockfish checkmated you. Challenge lost.")
+                self._show_failure_popup()
         elif board.is_stalemate() or board.is_insufficient_material() or board.can_claim_draw():
             self.challenge_active = False
             self.engine_thinking = False
             self._set_status("Draw. Restart the position and try again.")
 
     def restart_challenge(self):
-        if self.challenge_board is None:
+        if self.challenge_start_board is None:
             self.views.setCurrentWidget(self.setup_page)
             return
-        self._start_challenge(self.editor_position.copy(stack=False), self.side_choice.currentData())
+        self._start_challenge(self.challenge_start_board.copy(stack=False), self.challenge_start_user_color)
+
+    def _show_failure_popup(self):
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle("Endgame challenge failed")
+        dialog.setText("Checkmate. Stockfish wins.")
+        dialog.setInformativeText("Would you like to restart this endgame position?")
+        restart = dialog.addButton("Restart", QMessageBox.ButtonRole.AcceptRole)
+        dialog.addButton("Close", QMessageBox.ButtonRole.RejectRole)
+        dialog.setDefaultButton(restart)
+        dialog.exec()
+        if dialog.clickedButton() is restart:
+            self.restart_challenge()
 
 
 __all__ = ["EndgameTrainerPage"]

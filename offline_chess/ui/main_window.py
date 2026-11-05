@@ -24,14 +24,14 @@ import chess
 import chess.engine
 import chess.pgn
 import chess.polyglot
-from PyQt6.QtCore import Qt, QThread, QUrl, pyqtSignal, pyqtSlot, QObject, QPointF, QRectF, QTimer
+from PyQt6.QtCore import Qt, QThread, QUrl, pyqtSignal, pyqtSlot, QObject, QPointF, QRectF, QTimer, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QBrush, QAction, QPolygonF, QDesktopServices
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QSlider, QDialog,
     QVBoxLayout, QHBoxLayout, QGridLayout, QSplitter, QTableWidget,
     QTableWidgetItem, QHeaderView, QFileDialog, QMessageBox, QProgressBar,
     QCheckBox, QSpinBox, QComboBox, QAbstractItemView, QScrollArea, QSizePolicy,
-    QStackedWidget, QToolTip, QMenu, QTabWidget, QLineEdit,
+    QStackedWidget, QToolTip, QMenu, QTabWidget, QLineEdit, QGraphicsDropShadowEffect,
 )
 try:
     from PyQt6.QtMultimedia import QSoundEffect
@@ -61,6 +61,7 @@ from .review_dialogs import *
 from .position_lab import PositionAnalysisPage
 from .opening_trainer import OpeningTrainerPage
 from .endgame_trainer import EndgameTrainerPage
+from .language import LanguageController
 from .theme import *
 
 def _unparsed_pgn_token(text):
@@ -115,6 +116,7 @@ class ChessWindow(QMainWindow):
         self.game_version = 0
         self.openings: list[Opening] = []; self.opening_position_index = {}; self.book_path: Optional[str] = None
         self._closing=False;self._shutdown_requested=False;self._close_when_engine_stops=False
+        self._tab_loading_token=0;self._tab_loading_overlay=None;self._tab_loading_animation=None
         self._opening_load_lock=threading.Lock()
         self.review_token=0; self.sound_enabled = True; self.sounds = {}; self.explorer_dialog=None
         self.review_progress_dialog=None
@@ -145,6 +147,10 @@ class ChessWindow(QMainWindow):
         ChessBoard.default_show_coordinates=self.show_coordinates
         ChessBoard.default_animations=self.board_animations
         self._setup_ui(); self._setup_engine()
+        self.language_controller=LanguageController(self,self.profile_store)
+        try:saved_language=self.profile_store.get_setting("language","en") if self.profile_store else "en"
+        except Exception:saved_language="en"
+        self.language_controller.set_language(saved_language,persist=False)
         self.openings_loaded.connect(self._set_openings)
         self.evaluation_request.connect(self.worker.evaluate_position)
         self._load_default_openings(); self._sync_board()
@@ -1625,7 +1631,7 @@ class ChessWindow(QMainWindow):
         if index<0:return None
         page=ProfileDialog(self.profile_store,self.open_saved_game,self.set_board_theme,self.set_board_presentation,self,
                            sound_changed_callback=self.set_sound,load_opening_callback=self.load_opening_dialog,
-                           load_book_callback=self.load_book_dialog)
+                           load_book_callback=self.load_book_dialog,language_changed_callback=self.set_language)
         page.setStyleSheet(self._stylesheet())
         self._installing_profile_page=True;signals_blocked=self.main_tabs.blockSignals(True)
         self.main_tabs.removeTab(index);self.main_tabs.insertTab(index,page,"Profile")
@@ -1634,16 +1640,67 @@ class ChessWindow(QMainWindow):
         self.main_tabs.blockSignals(signals_blocked);self._installing_profile_page=False
         return page
 
+    def set_language(self,language):
+        if not hasattr(self,"language_controller"):
+            if self.profile_store:self.profile_store.set_setting("language",language)
+            return
+        self.language_controller.set_language(language)
+
     def _main_tab_changed(self,index):
+        self._tab_loading_token+=1
+        token=self._tab_loading_token
         widget=self.main_tabs.widget(index)
-        opening_trainer=getattr(self,"opening_trainer",None)
-        if widget is opening_trainer and opening_trainer is not None:
-            opening_trainer.refresh()
-        elif widget is self.profile_tab_placeholder:
+        self._show_tab_loading(widget,index)
+        QTimer.singleShot(30,lambda:self._activate_main_tab(index,token))
+
+    def _show_tab_loading(self,widget,index):
+        if self._tab_loading_animation:
+            self._tab_loading_animation.stop()
+        if self._tab_loading_overlay:
+            self._tab_loading_overlay.hide();self._tab_loading_overlay.deleteLater()
+        if widget is None:return
+        overlay=QFrame(widget);overlay.setObjectName("TabLoadingOverlay")
+        overlay.setStyleSheet("QFrame#TabLoadingOverlay { background: rgba(20,22,24,155); }")
+        overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents,True)
+        layout=QVBoxLayout(overlay);layout.addStretch(1)
+        frame=QFrame();frame.setObjectName("TabLoadingFrame")
+        frame.setStyleSheet("QFrame#TabLoadingFrame { background: #242729; border: 1px solid #b5e08e; border-radius: 12px; }")
+        frame_layout=QVBoxLayout(frame);frame_layout.setContentsMargins(24,14,24,14)
+        czech=hasattr(self,"language_controller") and self.language_controller.language=="cs"
+        label=QLabel("Načítání…" if czech else "Loading…");label.setObjectName("AccentText")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter);frame_layout.addWidget(label)
+        layout.addWidget(frame,0,Qt.AlignmentFlag.AlignCenter);layout.addStretch(1)
+        shadow=QGraphicsDropShadowEffect(frame);shadow.setBlurRadius(10)
+        shadow.setColor(QColor(181,224,142,190));shadow.setOffset(0,0);frame.setGraphicsEffect(shadow)
+        animation=QPropertyAnimation(shadow,b"blurRadius",self)
+        animation.setDuration(900);animation.setStartValue(8.0);animation.setKeyValueAt(.5,26.0)
+        animation.setEndValue(8.0);animation.setEasingCurve(QEasingCurve.Type.InOutSine);animation.setLoopCount(-1)
+        overlay.setGeometry(widget.rect());overlay.show();overlay.raise_();animation.start()
+        self._tab_loading_overlay=overlay;self._tab_loading_animation=animation
+
+    def _activate_main_tab(self,index,token):
+        if token!=self._tab_loading_token:return
+        widget=self.main_tabs.widget(index)
+        if widget is self.profile_tab_placeholder:
             page=self._ensure_profile_page()
-            if page is not None:self.main_tabs.setCurrentWidget(page)
-        elif widget is self.profile_page and self.profile_page is not None and not self._installing_profile_page:
+            if page is not None:
+                widget=page
+                self._show_tab_loading(widget,index)
+        elif widget is self.opening_trainer:
+            widget.refresh()
+        elif widget is self.profile_page and self.profile_page is not None:
             self._schedule_profile_refresh(self.profile_page)
+        QTimer.singleShot(240,lambda:self._finish_tab_loading(token))
+
+    def _finish_tab_loading(self,token):
+        if token!=self._tab_loading_token:return
+        if self._tab_loading_animation:self._tab_loading_animation.stop()
+        if self._tab_loading_overlay:self._tab_loading_overlay.hide()
+
+    def resizeEvent(self,event):
+        super().resizeEvent(event)
+        overlay=self._tab_loading_overlay
+        if overlay and overlay.parentWidget():overlay.setGeometry(overlay.parentWidget().rect())
 
     def practice_game_endgame(self):
         board=self.game_start_board.copy(stack=False)
@@ -1678,7 +1735,6 @@ class ChessWindow(QMainWindow):
         try:
             if page is self.profile_page and self.main_tabs.currentWidget() is page:
                 page.refresh()
-                page.refresh_chesscom_library(page.chesscom_username.text())
         finally:page.end_profile_loading(token)
 
     def open_profile(self):
@@ -1927,6 +1983,10 @@ class ChessWindow(QMainWindow):
         return destination
     def closeEvent(self,event):
         with self._opening_load_lock:self._closing=True
+        opening_trainer=getattr(self,"opening_trainer",None)
+        if opening_trainer is not None:
+            worker=getattr(opening_trainer,"_records_worker",None)
+            if worker and worker.isRunning():worker.wait(1500)
         profile_page=getattr(self,"profile_page",None)
         if profile_page is not None:profile_page.shutdown_background_workers()
         if self.review_speech:self.review_speech.stop()
