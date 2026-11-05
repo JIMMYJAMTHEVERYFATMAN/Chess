@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - codex/chromebook-linux-release
+      - master
     tags:
       - "v*"
   workflow_dispatch:
@@ -13,7 +14,7 @@ permissions:
 
 jobs:
   windows-release:
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/master'
     needs: linux-build
     permissions:
       contents: write
@@ -36,7 +37,7 @@ jobs:
             throw "Could not read APP_VERSION from offline_chess/config.py"
           }
           $version = $versionMatch.Groups[1].Value
-          if ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch") {
+          if ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch" -or $env:GITHUB_REF_TYPE -eq "branch") {
             $releaseTag = "v$version"
           } else {
             $releaseTag = $env:GITHUB_REF_NAME
