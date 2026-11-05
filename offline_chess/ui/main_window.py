@@ -59,6 +59,7 @@ from .feedback_dialog import FeedbackDialog
 from .profile_dialog import ProfileDialog
 from .review_dialogs import *
 from .position_lab import PositionAnalysisPage
+from .opening_trainer import OpeningTrainerPage
 from .theme import *
 
 def _unparsed_pgn_token(text):
@@ -102,6 +103,7 @@ class ChessWindow(QMainWindow):
         self.game_start_board=chess.Board();self.board = self.game_start_board.copy(); self.history: list[chess.Move] = []; self.player_color = chess.WHITE
         self.selected = None; self.last_move = None; self.best_move = None
         self.review_moves: list[ReviewMove] = []; self.reviewing = False; self.review_index = 0
+        self.review_playing=False;self.review_playback_delays=[]
         self.external_review_game_id=None;self.external_review_username=None
         self.chesscom_review_queue=[];self.chesscom_batch_total=0;self.chesscom_batch_completed=0;self.chesscom_batch_started_at=None;self.chesscom_review_wait_attempts=0
         self.review_show_best=False;self.review_show_reply=False;self.review_pv_active=False;self.review_pv_index=0;self.review_pv_kind="best"
@@ -344,6 +346,9 @@ class ChessWindow(QMainWindow):
         self.detail_scroll=QScrollArea();self.detail_scroll.setWidgetResizable(True);self.detail_scroll.setMinimumHeight(175);self.detail_scroll.setWidget(detail_card);review_col.addWidget(self.detail_scroll)
         nav=QHBoxLayout();self.prev_btn=self._button("‹","secondary");self.prev_btn.setToolTip("Previous move matching the selected filters (Left Arrow)");self.prev_btn.clicked.connect(lambda:self.navigate(-1));nav.addWidget(self.prev_btn)
         self.next_btn=self._button("›","secondary");self.next_btn.setToolTip("Next move matching the selected filters (Right Arrow)");self.next_btn.clicked.connect(lambda:self.navigate(1));nav.addWidget(self.next_btn)
+        self.review_play_btn=self._button("Play","primary");self.review_play_btn.setToolTip("Replay at the recorded clock pace. PGNs without clock tags play one move per second.")
+        self.review_play_btn.setEnabled(False);self.review_play_btn.clicked.connect(self.toggle_review_playback);nav.addWidget(self.review_play_btn)
+        self.review_play_timer=QTimer(self);self.review_play_timer.setSingleShot(True);self.review_play_timer.timeout.connect(self._advance_review_playback)
         self.reply_view_btn=self._button("Show reply","secondary");self.reply_view_btn.setCheckable(True);self.reply_view_btn.setEnabled(False);self.reply_view_btn.toggled.connect(self.toggle_review_reply);nav.addWidget(self.reply_view_btn)
         self.best_view_btn=self._button("Show best","secondary");self.best_view_btn.setCheckable(True);self.best_view_btn.toggled.connect(self.toggle_review_best);nav.addWidget(self.best_view_btn)
         self.review_btn=self._button("Review Game","primary");self.review_btn.clicked.connect(self.start_review);nav.addWidget(self.review_btn,1);review_col.addLayout(nav)
@@ -367,6 +372,9 @@ class ChessWindow(QMainWindow):
         self.position_lab=PositionAnalysisPage()
         self.position_lab.analysis_requested.connect(self.position_analysis_request.emit)
         self.main_tabs.addTab(self.position_lab,"Position Lab")
+        self.opening_trainer=OpeningTrainerPage(self.profile_store)
+        self.opening_trainer.set_openings(self.openings)
+        self.main_tabs.addTab(self.opening_trainer,"Opening Trainer")
         self.puzzle_dialog=PuzzleDialog(self.board_theme,self,self.profile_store)
         self.puzzle_dialog.setStyleSheet(self._stylesheet())
         self.puzzle_dialog.puzzle_requested.connect(self._request_puzzle)
@@ -410,6 +418,7 @@ class ChessWindow(QMainWindow):
     def set_mode(self,mode):
         indexes={"play":0,"review":1,"coach":2}
         if mode not in indexes:return
+        if mode!="review":self._stop_review_playback()
         if mode!="review" and self.review_speech:
             self.review_speech.stop()
             if self.speak_review_btn.isChecked():self.speak_review_btn.setChecked(False)
@@ -542,6 +551,7 @@ class ChessWindow(QMainWindow):
     def _set_openings(self,entries,paths):
         self.openings=entries
         self.opening_position_index=index_openings(entries)
+        self.opening_trainer.set_openings(entries)
         self.opening_label.setText(f"{len(entries):,} Lichess openings" if entries else "Opening database not loaded")
         self.opening_label.setToolTip("\n".join(str(p) for p in paths))
         self.statusBar().showMessage(f"Loaded {len(entries):,} opening lines from Lichess TSV",5000)
@@ -735,8 +745,11 @@ class ChessWindow(QMainWindow):
 
     def _push(self,move):
         if self._game_finished() or move not in self.board.legal_moves:return
+        self._stop_review_playback()
         capture=self.board.is_capture(move); castle=self.board.is_castling(move)
         self.board.push(move); self.history.append(move); self.last_move=move; self.best_move=None; self.selected=None
+        if len(self.review_playback_delays)<len(self.history):self.review_playback_delays.append(1.0)
+        self._update_review_playback_button()
         self.reviewing=False; self.review_index=len(self.history); self.review_moves=[];self._reset_review_surfaces("New move played · run a fresh review when the game is ready.")
         self._render_history(); self._play_sound("game_end" if self.board.is_game_over() else "check" if self.board.is_check() else "castle" if castle else "capture" if capture else "move")
         self._sync_board(); self._update_opening()
@@ -916,12 +929,14 @@ class ChessWindow(QMainWindow):
         else:
             self.review_filter.setCurrentIndex(0);self.review_side_filter.setCurrentIndex(0);self.jump_to_row(row,0)
     def jump_to_row(self,row,_col):
+        self._stop_review_playback()
         ply=review_row_ply(self.visible_review_plies,row)
         if not self.history or ply is None:return
         if self.reviewing and self.review_index==ply+1:return
         self.reviewing=True; self.review_index=ply+1; self.selected=None; self.best_move=None;self.review_pv_active=False;self.review_pv_index=0;self._clear_review_overlays()
         self._sync_board(); self._show_detail()
     def navigate(self,delta):
+        self._stop_review_playback()
         if not self.history:return
         visible=self.visible_review_plies
         if not visible:
@@ -942,10 +957,56 @@ class ChessWindow(QMainWindow):
 
     def jump_to_ply(self,ply):
         if not self.review_moves:return
-        self.reviewing=True;self.review_index=max(1,min(len(self.history),int(ply)));self.review_pv_active=False;self.review_pv_index=0;self._clear_review_overlays();self._sync_board();self._show_detail()
-        move_index=self.review_index-1
-        if move_index in self.visible_review_plies:self.review_table.selectRow(self.visible_review_plies.index(move_index))
-        else:self.review_table.clearSelection()
+        self._stop_review_playback()
+        self._display_review_ply(max(1,min(len(self.history),int(ply))))
+
+    def _display_review_ply(self,ply):
+        self.reviewing=True;self.review_index=max(0,min(len(self.history),int(ply)));self.review_pv_active=False
+        self.review_pv_index=0;self.selected=None;self.best_move=None;self._clear_review_overlays()
+        previous_block=self.review_table.blockSignals(True)
+        try:
+            move_index=self.review_index-1
+            if move_index in self.visible_review_plies:self.review_table.selectRow(self.visible_review_plies.index(move_index))
+            else:self.review_table.clearSelection()
+        finally:self.review_table.blockSignals(previous_block)
+        self._sync_board();self._show_detail()
+
+    def toggle_review_playback(self):
+        if self.review_playing:
+            self._stop_review_playback();return
+        if not self.history:return
+        if not self.reviewing or self.review_index>=len(self.history):
+            self._display_review_ply(0)
+        self.review_playing=True;self.review_play_btn.setText("Pause")
+        self._schedule_review_playback()
+
+    def _schedule_review_playback(self):
+        if not self.review_playing:return
+        next_index=self.review_index
+        if next_index>=len(self.history):
+            self._stop_review_playback();return
+        delay=(self.review_playback_delays[next_index]
+               if next_index<len(self.review_playback_delays) else 1.0)
+        try:milliseconds=max(0,min(2_147_483_647,round(float(delay)*1000)))
+        except (TypeError,ValueError,OverflowError):milliseconds=1000
+        self.review_play_timer.start(milliseconds)
+
+    def _advance_review_playback(self):
+        if not self.review_playing:return
+        next_index=self.review_index+1
+        if next_index>len(self.history):
+            self._stop_review_playback();return
+        self._display_review_ply(next_index)
+        if next_index>=len(self.history):self._stop_review_playback()
+        else:self._schedule_review_playback()
+
+    def _stop_review_playback(self):
+        if hasattr(self,"review_play_timer"):self.review_play_timer.stop()
+        self.review_playing=False
+        if hasattr(self,"review_play_btn"):self.review_play_btn.setText("Play")
+
+    def _update_review_playback_button(self):
+        if hasattr(self,"review_play_btn"):self.review_play_btn.setEnabled(bool(self.history))
 
     def _key_moments(self):
         moments=review_moment_tags(self.review_moves)
@@ -1034,7 +1095,7 @@ class ChessWindow(QMainWindow):
         self.statusBar().showMessage("Key moment · "+" + ".join(moments[target]),6000)
     def _show_detail(self):
         self._update_key_moment_controls()
-        if not self.review_index or self.review_index>len(self.review_moves):
+        if not self.review_moves or not self.review_index or self.review_index>len(self.review_moves):
             if self.review_speech:self.review_speech.stop()
             self._last_spoken_ply=None
             if self.speak_review_btn.isChecked():self.speak_review_btn.setChecked(False)
@@ -1082,6 +1143,7 @@ class ChessWindow(QMainWindow):
         self.evalbar.set_eval(item.eval_after)
     def start_review(self):
         if not self.history: QMessageBox.information(self,"Review game","Play a game or import a PGN first."); return
+        self._stop_review_playback()
         if not self.engine_ready:
             if self.chesscom_batch_total:
                 self.chesscom_review_wait_attempts+=1
@@ -1339,6 +1401,7 @@ class ChessWindow(QMainWindow):
 
     def begin_move_review(self,start_ply=1):
         if not self.review_moves:return
+        self._stop_review_playback()
         self.set_mode("review")
         self._clear_review_overlays();self.review_pv_active=False;self.review_pv_index=0;self.reviewing=True
         self.review_index=max(1,min(len(self.history),int(start_ply)));self.selected=None;self.best_move=None;self._render_history();self._sync_board();self._show_detail()
@@ -1562,7 +1625,9 @@ class ChessWindow(QMainWindow):
 
     def _main_tab_changed(self,index):
         widget=self.main_tabs.widget(index)
-        if widget is self.profile_tab_placeholder:
+        if widget is self.opening_trainer:
+            self.opening_trainer.refresh()
+        elif widget is self.profile_tab_placeholder:
             page=self._ensure_profile_page()
             if page is not None:self.main_tabs.setCurrentWidget(page)
         elif widget is self.profile_page and self.profile_page is not None and not self._installing_profile_page:
@@ -1645,8 +1710,10 @@ class ChessWindow(QMainWindow):
             for move in moves:
                 if move not in board.legal_moves:raise ValueError("Saved PGN contains an illegal move")
                 board.push(move)
+            self._stop_review_playback();self.review_playback_delays=pgn_playback_delays(game)
             self.review_token+=1;self.worker.review_cancel_event.set();self.review_busy=False;self.review_btn.setText("Review Game");self.analysis_level.setEnabled(True);self._update_syzygy_button()
             self.game_version+=1;self.game_start_board=start_board;self.history=moves;self.board=board;self.review_moves=[];self.reviewing=False;self.review_index=len(moves);self.last_move=moves[-1] if moves else None
+            self._update_review_playback_button()
             self.external_review_game_id=chesscom_record.get("game_id") if chesscom_record else None
             self.external_review_username=chesscom_record.get("username") if chesscom_record else None
             self.external_review_players=({side:(game.headers.get(side," ")
@@ -1704,18 +1771,21 @@ class ChessWindow(QMainWindow):
 
     def undo(self):
         if not self.history:return
+        self._stop_review_playback()
         self.review_token+=1;self.worker.review_cancel_event.set();self.review_busy=False;self.review_btn.setText("Review Game");self.analysis_level.setEnabled(True);self._update_syzygy_button()
         self.game_version+=1; self.reviewing=False; self.game_result_override=None; self.bot_busy=False
         remove=2 if len(self.history)>=2 else 1; del self.history[-remove:]
+        self.review_playback_delays=self.review_playback_delays[:len(self.history)];self._update_review_playback_button()
         self.board=self.game_start_board.copy(stack=False)
         for move in self.history:self.board.push(move)
         self.last_move=self.history[-1] if self.history else None; self.review_moves=[]; self.review_index=len(self.history)
         self._reset_review_surfaces("Review this game to refresh its analysis.");self._render_history(); self._sync_board(); self._after_move(); self._update_opening()
     def reset(self):
+        self._stop_review_playback()
         self.review_token+=1; self.worker.review_cancel_event.set(); self.review_busy=False; self.review_btn.setText("Review Game");self.analysis_level.setEnabled(True);self._update_syzygy_button()
         self.external_review_game_id=None;self.external_review_username=None;self.external_review_players={};self.external_review_ratings={};self.external_review_clocks=[]
         self.chesscom_review_queue.clear();self.chesscom_batch_total=0;self.chesscom_batch_completed=0
-        self.game_version+=1; self.game_start_board=chess.Board();self.board=self.game_start_board.copy(); self.history=[]; self.review_moves=[]; self.reviewing=False; self.review_index=0; self.last_move=None; self.best_move=None; self.selected=None; self.game_result_override=None; self.bot_busy=False; self.rating_eligible=True
+        self.game_version+=1; self.game_start_board=chess.Board();self.board=self.game_start_board.copy(); self.history=[]; self.review_moves=[]; self.reviewing=False; self.review_index=0;self.review_playback_delays=[];self._update_review_playback_button(); self.last_move=None; self.best_move=None; self.selected=None; self.game_result_override=None; self.bot_busy=False; self.rating_eligible=True
         self.move_table.setRowCount(0); self.review_table.setRowCount(0); self.progress.setValue(0); self._reset_review_surfaces("Run a review to compare both sides and find the game’s turning points."); self.evalbar.set_eval(0)
         self.best_view_btn.setChecked(False)
         self._update_player_labels(); self.turn_label.setText("Your turn · " + ("White" if self.player_color else "Black")); self._sync_board(); self._update_opening(); self.statusBar().showMessage("New game started")
@@ -1741,9 +1811,11 @@ class ChessWindow(QMainWindow):
             warning=(f" · invalid token {unparsed_token!r}; loaded legal prefix only" if unparsed_token else
                      f" · {str(move_error).split(' while parsing ',1)[0]}; loaded legal prefix only" if move_error else "")
             self.review_token+=1; self.worker.review_cancel_event.set(); self.review_busy=False; self.review_btn.setText("Review Game");self.analysis_level.setEnabled(True);self._update_syzygy_button()
+            self._stop_review_playback();self.review_playback_delays=pgn_playback_delays(game)
             self.external_review_game_id=None;self.external_review_username=None
             self.external_review_players={};self.external_review_ratings={};self.external_review_clocks=[]
             self.game_version+=1; self.game_start_board=start_board;self.history=moves; self.board=board; self.review_moves=[]; self.reviewing=False; self.review_index=len(moves); self.last_move=moves[-1] if moves else None
+            self._update_review_playback_button()
             self.rating_eligible=game.headers.get("OfflineChessPlayedLocally")=="1"
             if game.headers.get("OfflineChessUserColor") in ("White","Black"):
                 self.player_color=chess.WHITE if game.headers["OfflineChessUserColor"]=="White" else chess.BLACK

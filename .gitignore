@@ -30,6 +30,7 @@ dist/
 # IDE and operating system files
 .idea/
 .vscode/
+.gui_audit_profile_*/
 .DS_Store
 Thumbs.db
 Desktop.ini

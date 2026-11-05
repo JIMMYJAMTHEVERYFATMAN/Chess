@@ -715,6 +715,44 @@ def chesscom_pgn_clock_positions(game):
     return positions
 
 
+def pgn_playback_delays(game, fallback_seconds=1.0):
+    """Estimate each mainline move's elapsed time from its recorded clock tags."""
+    moves=list(game.mainline_moves())
+    if not moves:return []
+    try:fallback=max(0.0,float(fallback_seconds))
+    except (TypeError,ValueError):fallback=1.0
+    delays=[fallback]*len(moves)
+    nodes=[];node=game
+    for _move in moves:
+        node=node.variation(0);nodes.append(node)
+    if not any(node.clock() is not None for node in nodes):return delays
+
+    control=re.fullmatch(r"(\d+(?:\.\d+)?)(?:\+(\d+(?:\.\d+)?))?",
+                         str(game.headers.get("TimeControl","")).strip())
+    try:
+        initial=float(control.group(1)) if control else None
+        increment=float(control.group(2) or 0) if control else 0.0
+    except (TypeError,ValueError):initial=None;increment=0.0
+    clocks={chess.WHITE:initial,chess.BLACK:initial}
+    pending={chess.WHITE:[],chess.BLACK:[]}
+    for index,child in enumerate(nodes):
+        side=child.parent.board().turn
+        pending[side].append(index)
+        clock=child.clock()
+        if clock is None:continue
+        try:clock=float(clock)
+        except (TypeError,ValueError):continue
+        if not math.isfinite(clock):continue
+        previous=clocks[side]
+        if previous is not None:
+            elapsed=max(0.0,previous+increment*len(pending[side])-clock)
+            per_move=elapsed/len(pending[side])
+            for move_index in pending[side]:delays[move_index]=per_move
+        clocks[side]=clock
+        pending[side].clear()
+    return delays
+
+
 def format_chesscom_clock(seconds):
     if seconds is None:return "—:——"
     try:seconds=max(0.0,float(seconds))
@@ -764,6 +802,7 @@ __all__ = [
     'ProfileStore',
     'prepare_chesscom_pgn',
     'chesscom_pgn_clock_positions',
+    'pgn_playback_delays',
     'format_chesscom_clock',
     'predicted_performance_elo',
 ]

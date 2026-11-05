@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import random
 import threading
 import time
@@ -18,6 +19,34 @@ from PyQt6.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 from .config import MAX_ELO, MIN_ELO, MIN_TARGET_ELO, STOCKFISH_PATH
 from .openings import position_key
 from .review_logic import *
+
+def _choose_sub_1320_candidate(board,candidates,elo):
+    """Add target-sensitive, evaluation-aware mistakes to Stockfish's candidate choices."""
+    softness=max(0.0,min(1.0,(MIN_ELO-int(elo))/(MIN_ELO-MIN_TARGET_ELO)))
+    scored_moves=[]
+    for candidate in candidates:
+        pv=candidate.get("pv",[]);score=candidate.get("score")
+        if not pv or pv[0] not in board.legal_moves or score is None:continue
+        if any(existing==pv[0] for existing,_value in scored_moves):continue
+        value=score.pov(board.turn).score(mate_score=100_000)
+        if value is not None:scored_moves.append((pv[0],value))
+    if not scored_moves:return None
+    scored_moves.sort(key=lambda item:item[1],reverse=True)
+    best_score=scored_moves[0][1]
+    base_temperature=300+200*softness**1.4
+    calibration_blend=softness
+    check_scale=.55 if board.is_check() else 1.0
+    legacy_rank_power=1.2-.4*softness
+    # Mix normalized distributions so the rating curve stays smooth near both ends.
+    legacy_weights=[];human_weights=[]
+    for index,(_candidate,value) in enumerate(scored_moves):
+        rank=index+1;gap=min(100_000,best_score-value)
+        legacy_weights.append(rank**(-legacy_rank_power)*math.exp(-gap/(base_temperature*check_scale)))
+        human_weights.append(rank**(-.2)*math.exp(-gap/(10_000_000*check_scale)))
+    legacy_total=sum(legacy_weights);human_total=sum(human_weights)
+    weights=[(1-calibration_blend)*legacy/legacy_total+calibration_blend*human/human_total
+             for legacy,human in zip(legacy_weights,human_weights)]
+    return random.choices([candidate for candidate,_value in scored_moves],weights=weights,k=1)[0]
 
 class EngineWorker(QObject):
     ready = pyqtSignal(dict)
@@ -46,7 +75,8 @@ class EngineWorker(QObject):
         self._elo = MIN_ELO
         self._uci_elo_min = MIN_ELO
         self._uci_elo_max = MAX_ELO
-        self._multipv_max = 8
+        self._multipv_max = 16
+        self._bot_multipv_max = 48
         self.review_cache=OrderedDict()
         self.review_cache_limit=384
         self.stop_event = threading.Event()
@@ -70,7 +100,9 @@ class EngineWorker(QObject):
                 self._uci_elo_min=max(MIN_ELO,int(option.min or MIN_ELO))
                 self._uci_elo_max=min(MAX_ELO,int(option.max or MAX_ELO))
             if "MultiPV" in self.option_names:
-                self._multipv_max=max(1,min(8,int(self.engine.options["MultiPV"].max or 8)))
+                multipv_option_max=int(self.engine.options["MultiPV"].max or 24)
+                self._multipv_max=max(1,min(16,multipv_option_max))
+                self._bot_multipv_max=max(1,min(48,multipv_option_max))
             options = {}
             if "UCI_LimitStrength" in self.option_names: options["UCI_LimitStrength"] = True
             if "UCI_Elo" in self.option_names: options["UCI_Elo"] = self._uci_elo_min
@@ -119,6 +151,7 @@ class EngineWorker(QObject):
             if self.engine:
                 options={}
                 if "UCI_Elo" in self.option_names:
+                    # Stockfish's calibrated floor is 1320; sub-floor Elo is modeled in play_bot.
                     options["UCI_Elo"]=max(self._uci_elo_min,min(self._uci_elo_max,self._elo))
                 if "Skill Level" in self.option_names:
                     if self._elo < MIN_ELO:
@@ -138,28 +171,17 @@ class EngineWorker(QObject):
             duration = .35 if self._elo < 2000 else .65
             if self._elo < MIN_ELO:
                 softness=(MIN_ELO-self._elo)/(MIN_ELO-MIN_TARGET_ELO)
-                duration=max(.08,.14+.16*(1-softness))
-                multipv_count=min(self._multipv_max,2+round(softness*6))
+                legal_count=board.legal_moves.count()
+                complexity=1+min(.25,max(0,legal_count-20)/160)
+                duration=(.35+.12*softness)*random.uniform(.8,1.2)*complexity
+                multipv_count=self._bot_multipv_max
                 move=None
                 if "MultiPV" in self.option_names:
                     candidates=self.engine.analyse(board,chess.engine.Limit(time=duration),multipv=multipv_count)
                     if isinstance(candidates,dict):candidates=[candidates]
-                    moves=[]
-                    for candidate in candidates:
-                        pv=candidate.get("pv",[])
-                        if pv and pv[0] in board.legal_moves and pv[0] not in moves:moves.append(pv[0])
-                    non_best_chance=.10+.78*softness
-                    if moves and len(moves)>1 and random.random()<non_best_chance:
-                        weaker=moves[1:]
-                        weights=[1/(index+1)**1.35 for index in range(len(weaker))]
-                        move=random.choices(weaker,weights=weights,k=1)[0]
-                    elif moves:
-                        move=moves[0]
+                    move=_choose_sub_1320_candidate(board,candidates,self._elo)
                 if move is None:
                     move=self.engine.play(board,chess.engine.Limit(time=duration)).move
-                    if "MultiPV" not in self.option_names and random.random()<.03+.16*softness:
-                        legal=list(board.legal_moves)
-                        if legal:move=random.choice(legal)
             else:
                 move=self.engine.play(board, chess.engine.Limit(time=duration)).move
             self.bot_move.emit((version, board.fen(), move))

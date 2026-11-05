@@ -1,5 +1,14 @@
 # Changelog
 
+## [v2.0.0.1] - 2026-11-05
+
+### Added
+
+- Opening Trainer tab beside Position Lab, with White and Black move practice across multiple repertoire lines and opponent replies.
+- Chess.com opening performance table showing saved game counts and win/draw/loss results, with practice shortcuts for most-played and lowest-win-rate openings.
+- Review playback follows recorded PGN clock times when available and uses a one-second fallback otherwise.
+- More calibrated Stockfish candidate selection for bot ratings below 1320 Elo.
+
 ## [v1.1.5.0] - 2026-11-04
 
 ### Added

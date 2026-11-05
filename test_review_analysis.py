@@ -1,6 +1,7 @@
 import unittest
 import io
 import json
+import math
 from types import SimpleNamespace
 import os
 import sqlite3
@@ -46,6 +47,7 @@ try:
         normalize_chesscom_username,
         validate_chesscom_archive_url,
         prepare_chesscom_pgn,
+        pgn_playback_delays,
         chesscom_opening_label,
         predicted_performance_elo,
         REVIEW_ANALYSIS_VERSION,
@@ -78,6 +80,7 @@ try:
         MistakePracticeDialog,
     )
     from offline_chess.ui import main_window as main_window_module
+    from offline_chess.engine_worker import _choose_sub_1320_candidate
     from offline_chess.ui.main_window import ChessWindow as MainWindowUi
     from offline_chess.ui.position_lab import PositionAnalysisPage
     from offline_chess.openings import detect_opening, find_opening_ply, index_openings, opening_from_file
@@ -114,9 +117,114 @@ class ReviewAnalysisTests(unittest.TestCase):
         if self._previous_xdg_data_home is None:os.environ.pop("XDG_DATA_HOME",None)
         else:os.environ["XDG_DATA_HOME"]=self._previous_xdg_data_home
 
+    def test_sub_1320_policy_mixes_human_calibration_smoothly_across_rating_range(self):
+        board=chess.Board()
+        candidates=[
+            {"pv":[board.parse_san(san)],"score":chess.engine.PovScore(chess.engine.Cp(score),chess.WHITE)}
+            for san,score in (("e4",35),("d4",22),("Nf3",3),("c4",-38))
+        ]
+        observed=[]
+        def choose_first(population,weights,k):
+            observed.append(weights[0]/sum(weights))
+            return [population[0]]
+        with patch("offline_chess.engine_worker.random.choices",side_effect=choose_first):
+            for elo in (1320,900,500,400):
+                self.assertEqual(_choose_sub_1320_candidate(board,candidates,elo),candidates[0]["pv"][0])
+        self.assertTrue(all(left>right for left,right in zip(observed,observed[1:])))
+        self.assertTrue(.28<observed[-1]<.31)
+        expected=[]
+        for elo in (1320,900,500,400):
+            softness=(1320-elo)/920
+            blend=softness
+            legacy_temperature=300+200*softness**1.4
+            legacy_rank_power=1.2-.4*softness
+            legacy_weights=[(1/(index+1)**legacy_rank_power)
+                            *math.exp(-(35-score)/legacy_temperature)
+                            for index,score in enumerate((35,22,3,-38))]
+            human_weights=[(1/(index+1)**.2)*math.exp(-(35-score)/10_000_000)
+                           for index,score in enumerate((35,22,3,-38))]
+            expected.append((1-blend)*legacy_weights[0]/sum(legacy_weights)
+                            +blend*human_weights[0]/sum(human_weights))
+        for actual,wanted in zip(observed,expected):self.assertAlmostEqual(actual,wanted)
+        clearly_better=[
+            {"pv":[board.parse_san(san)],"score":chess.engine.PovScore(chess.engine.Cp(score),chess.WHITE)}
+            for san,score in (("e4",35),("d4",-500),("Nf3",-700),("c4",-1200))
+        ]
+        separated=[]
+        def record_wide_gap(population,weights,k):
+            separated.append(weights[0]/sum(weights))
+            return [population[0]]
+        with patch("offline_chess.engine_worker.random.choices",side_effect=record_wide_gap):
+            _choose_sub_1320_candidate(board,clearly_better,1320)
+        self.assertGreater(separated[0],observed[0])
+
+    def test_sub_1320_policy_orders_candidates_from_black_to_move_perspective(self):
+        board=chess.Board();board.turn=chess.BLACK
+        candidates=[
+            {"pv":[board.parse_san(san)],"score":chess.engine.PovScore(chess.engine.Cp(score),chess.WHITE)}
+            for san,score in (("e5",30),("d5",15),("Nf6",5),("c5",-25))
+        ]
+        observed={}
+        def record(population,weights,k):
+            observed["population"]=population;observed["weights"]=weights
+            return [population[0]]
+        with patch("offline_chess.engine_worker.random.choices",side_effect=record):
+            selected=_choose_sub_1320_candidate(board,candidates,400)
+        expected=[board.parse_san(san) for san in ("c5","Nf6","d5","e5")]
+        self.assertEqual(observed["population"],expected)
+        self.assertEqual(selected,expected[0])
+
+    def test_low_elo_bot_uses_wider_candidate_pool_without_changing_review_cap(self):
+        board=chess.Board()
+        class CandidateEngine:
+            def __init__(self):self.requested_multipv=[]
+            def analyse(self,position,_limit,multipv):
+                self.requested_multipv.append(multipv)
+                moves=list(position.legal_moves)[:4]
+                return [{"pv":[move],"score":chess.engine.PovScore(
+                    chess.engine.Cp(40-index*15),position.turn)} for index,move in enumerate(moves)]
+        worker=EngineWorker();worker.engine=CandidateEngine();worker.option_names={"MultiPV"}
+        for elo,expected in ((1300,48),(700,48),(400,48)):
+            worker._elo=elo
+            with patch("offline_chess.engine_worker.random.uniform",return_value=1.0):
+                worker.play_bot((1,board.copy()))
+            self.assertEqual(worker.engine.requested_multipv[-1],expected)
+        self.assertEqual(worker._multipv_max,16)
+
     def test_import_pgn_scanner_flags_unparsed_movetext(self):
         pgn='[Event "Test"]\n\n1. e4 e5 2. Nf3 Kg9 *\n'
         self.assertEqual(main_window_module._unparsed_pgn_token(pgn),"Kg9")
+
+    def test_review_playback_uses_clock_elapsed_time_and_falls_back_without_clocks(self):
+        no_clock=chess.pgn.read_game(io.StringIO(
+            '[TimeControl "600+5"]\n\n1. e4 e5 2. Nf3 Nc6 *'))
+        self.assertEqual(pgn_playback_delays(no_clock),[1.0]*4)
+
+        timed=chess.pgn.read_game(io.StringIO(
+            '[TimeControl "600+5"]\n\n'
+            '1. e4 {[%clk 0:09:57.5]} e5 {[%clk 0:09:56.0]} '
+            '2. Nf3 {[%clk 0:09:54.2]} Nc6 {[%clk 0:09:52.5]} *'))
+        self.assertEqual([round(delay,1) for delay in pgn_playback_delays(timed)],
+                         [7.5,9.0,8.3,8.5])
+
+    def test_review_playback_schedules_next_move_and_stops_after_final_move(self):
+        displayed=[];scheduled=[]
+        target=SimpleNamespace(
+            review_playing=True,review_index=0,history=[1,2],
+            review_playback_delays=[.25,1.5],review_play_timer=MagicMock(),
+            _display_review_ply=lambda ply:displayed.append(ply),
+            _schedule_review_playback=lambda:scheduled.append(True),
+            _stop_review_playback=lambda:setattr(target,"review_playing",False),
+        )
+        MainWindowUi._schedule_review_playback(target)
+        target.review_play_timer.start.assert_called_once_with(250)
+        MainWindowUi._advance_review_playback(target)
+        self.assertEqual(displayed,[1])
+        self.assertEqual(scheduled,[True])
+        target.review_index=1
+        MainWindowUi._advance_review_playback(target)
+        self.assertEqual(displayed,[1,2])
+        self.assertFalse(target.review_playing)
 
     def test_import_pgn_recognizes_malformed_san_parse_errors(self):
         game=chess.pgn.read_game(io.StringIO("1. e4 e5 2. Nf3 Bxg2 *"))
@@ -165,6 +273,8 @@ class ReviewAnalysisTests(unittest.TestCase):
             game_start_board=chess.Board(),board=chess.Board(),history=[chess.Move.from_uci("e2e4")],
             review_moves=[MagicMock()],reviewing=False,review_index=1,last_move=chess.Move.from_uci("e2e4"),
             best_move=None,selected=None,game_result_override=None,bot_busy=False,rating_eligible=True,
+            review_playback_delays=[1.0],_stop_review_playback=MagicMock(),
+            _update_review_playback_button=MagicMock(),
             move_table=move_table,review_table=review_table,progress=MagicMock(),
             _reset_review_surfaces=MagicMock(),evalbar=MagicMock(),best_view_btn=MagicMock(),
             _update_player_labels=MagicMock(),turn_label=MagicMock(),player_color=chess.WHITE,
@@ -279,6 +389,8 @@ class ReviewAnalysisTests(unittest.TestCase):
                 external_review_ratings={"old":1000},external_review_clocks=[1],game_version=0,
                 game_start_board=chess.Board(),history=[],board=chess.Board(),review_moves=[],reviewing=False,
                 review_index=0,last_move=None,rating_eligible=True,player_color=chess.WHITE,
+                review_playback_delays=[],_stop_review_playback=MagicMock(),
+                _update_review_playback_button=MagicMock(),
                 side_choice=MagicMock(),game_result_override=None,review_table=MagicMock(),progress=MagicMock(),
                 _reset_review_surfaces=MagicMock(),_update_player_labels=MagicMock(),turn_label=MagicMock(),
                 _render_history=MagicMock(),_sync_board=MagicMock(),_update_opening=MagicMock(),
@@ -1020,6 +1132,26 @@ class ReviewAnalysisTests(unittest.TestCase):
                 dialog._finish_profile_loading(second,dialog._profile_loading_tasks[second][0])
                 self.assertTrue(dialog.profile_loading_overlay.isHidden())
                 self.assertEqual(dialog.profile_loading_animation.state().name,"Stopped")
+                dialog.close();dialog.deleteLater();app.processEvents()
+        if previous is None:os.environ.pop("LOCALAPPDATA",None)
+        else:os.environ["LOCALAPPDATA"]=previous
+
+    def test_chesscom_tables_reflow_and_quick_actions_are_at_the_top(self):
+        app=QApplication.instance() or QApplication([])
+        previous=os.environ.get("LOCALAPPDATA")
+        with tempfile.TemporaryDirectory(dir=os.getcwd()) as data_dir:
+            with patch.dict(os.environ,{"LOCALAPPDATA":data_dir,"XDG_DATA_HOME":data_dir}):
+                dialog=ProfileDialog(ProfileStore(),lambda _game:None)
+                actions={dialog.chesscom_top_actions.itemAt(i).widget()
+                         for i in range(dialog.chesscom_top_actions.count())
+                         if dialog.chesscom_top_actions.itemAt(i).widget() is not None}
+                self.assertTrue(set(dialog.chesscom_top_action_buttons).issubset(actions))
+                grid=dialog.chesscom_performance_tables
+                for width,columns in ((2000,3),(1300,2),(1000,2),(900,1)):
+                    grid.resize(width,400);grid._reflow()
+                    self.assertEqual(grid.column_count,columns)
+                self.assertEqual(dialog.chesscom_controls.parentWidget().objectName(),"InsetCard")
+                self.assertIsNot(dialog.chesscom_library.parentWidget(),dialog.chesscom_performance_tables)
                 dialog.close();dialog.deleteLater();app.processEvents()
         if previous is None:os.environ.pop("LOCALAPPDATA",None)
         else:os.environ["LOCALAPPDATA"]=previous

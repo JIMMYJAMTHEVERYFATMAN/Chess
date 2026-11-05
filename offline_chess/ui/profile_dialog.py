@@ -32,6 +32,37 @@ from .feedback_dialog import FeedbackDialog
 from .review_dialogs import *
 from .theme import *
 
+class ResponsiveTableGrid(QWidget):
+    """Lay related summary tables out in up to three equal-width panels."""
+    def __init__(self,parent=None):
+        super().__init__(parent);self._grid=QGridLayout(self);self._grid.setContentsMargins(0,0,0,0)
+        self._grid.setHorizontalSpacing(12);self._grid.setVerticalSpacing(12)
+        self._panels=[];self._columns=0
+
+    @property
+    def column_count(self):return self._columns
+
+    def add_table(self,title,table,extras=()):
+        panel=QFrame();panel.setObjectName("InsetCard")
+        column=QVBoxLayout(panel);column.setContentsMargins(12,10,12,12);column.setSpacing(7)
+        heading=QLabel(title);heading.setObjectName("SectionTitle");column.addWidget(heading)
+        for extra in extras:column.addWidget(extra)
+        column.addWidget(table,1);self._panels.append(panel);self._reflow()
+        return panel
+
+    def resizeEvent(self,event):
+        super().resizeEvent(event);self._reflow()
+
+    def _reflow(self):
+        capacity=3 if self.width()>=1800 else 2 if self.width()>=1000 else 1
+        columns=min(capacity,len(self._panels)) or capacity
+        if columns==self._columns and self._grid.count()==len(self._panels):return
+        while self._grid.count():self._grid.takeAt(0)
+        for index,panel in enumerate(self._panels):self._grid.addWidget(panel,index//columns,index%columns)
+        for index in range(3):self._grid.setColumnStretch(index,1 if index<columns else 0)
+        self._columns=columns
+
+
 class ProfileDialog(QWidget):
     def __init__(self,store,open_game_callback,theme_changed_callback=None,presentation_changed_callback=None,parent=None,
                  sound_changed_callback=None,load_opening_callback=None,load_book_callback=None):
@@ -282,6 +313,9 @@ class ProfileDialog(QWidget):
         layout.addLayout(account_row)
         self.chesscom_status=QLabel("Enter your Chess.com username to find available monthly archives.");self.chesscom_status.setObjectName("Muted");self.chesscom_status.setWordWrap(True);layout.addWidget(self.chesscom_status)
         self.chesscom_progress=QProgressBar();self.chesscom_progress.setTextVisible(True);self.chesscom_progress.setVisible(False);layout.addWidget(self.chesscom_progress)
+        quick_actions=QHBoxLayout();quick_actions.setSpacing(8)
+        quick_actions_title=QLabel("QUICK ACTIONS");quick_actions_title.setObjectName("SectionTitle");quick_actions.addWidget(quick_actions_title)
+        self.chesscom_top_actions=quick_actions;layout.addLayout(quick_actions)
         snapshot_header=QHBoxLayout();snapshot_title=QLabel("PERFORMANCE SNAPSHOT");snapshot_title.setObjectName("SectionTitle");snapshot_header.addWidget(snapshot_title,1)
         snapshot_header.addWidget(QLabel("Insights period"));self.chesscom_date_filter=QComboBox();self.chesscom_date_filter.addItems(["All time","Last 7 days","Last 30 days","Last 90 days","Last 365 days","This year"]);snapshot_header.addWidget(self.chesscom_date_filter)
         layout.addLayout(snapshot_header)
@@ -342,57 +376,70 @@ class ProfileDialog(QWidget):
         rating_header=QHBoxLayout();self.chesscom_rating_label=QLabel("RATING HISTORY");self.chesscom_rating_label.setObjectName("SectionTitle");rating_header.addWidget(self.chesscom_rating_label,1)
         rating_header.addWidget(QLabel("Time control"));self.chesscom_speed_filter=QComboBox();self.chesscom_speed_filter.addItems(["All time controls","Bullet","Blitz","Rapid","Daily"]);self.chesscom_speed_filter.setMinimumWidth(190);rating_header.addWidget(self.chesscom_speed_filter);layout.addLayout(rating_header)
         self.chesscom_elo_chart=EloHistoryChart();layout.addWidget(self.chesscom_elo_chart)
-        control_title=QLabel("PERFORMANCE BY TIME CONTROL");control_title.setObjectName("SectionTitle");layout.addWidget(control_title)
+        control_title=QLabel("PERFORMANCE BY TIME CONTROL");control_title.setObjectName("SectionTitle")
         self.chesscom_controls=QTableWidget(0,5);self.chesscom_controls.setHorizontalHeaderLabels(["Time control","Games","W–D–L","Score","Review accuracy"])
-        self._configure_chesscom_table(self.chesscom_controls);self.chesscom_controls.setMaximumHeight(190);layout.addWidget(self.chesscom_controls)
-        split_insights=QHBoxLayout();split_insights.setSpacing(12)
-        color_panel=QVBoxLayout();color_title=QLabel("RESULTS BY COLOR");color_title.setObjectName("SectionTitle");color_panel.addWidget(color_title)
+        self._configure_chesscom_table(self.chesscom_controls);self.chesscom_controls.setMaximumHeight(190)
+        color_title=QLabel("RESULTS BY COLOR");color_title.setObjectName("SectionTitle")
         self.chesscom_colors=QTableWidget(0,4);self.chesscom_colors.setHorizontalHeaderLabels(["Color","Games","W–D–L","Score"])
-        self._configure_chesscom_table(self.chesscom_colors);self.chesscom_colors.setMaximumHeight(160);color_panel.addWidget(self.chesscom_colors)
-        rating_panel=QVBoxLayout();rating_band_title=QLabel("RESULT VS RATING EXPECTATION");rating_band_title.setObjectName("SectionTitle")
+        self._configure_chesscom_table(self.chesscom_colors);self.chesscom_colors.setMaximumHeight(160)
+        rating_band_title=QLabel("RESULT VS RATING EXPECTATION");rating_band_title.setObjectName("SectionTitle")
         rating_band_title.setToolTip("Expected score is estimated with the Elo formula and the ratings listed in each game archive. It is a model baseline, not a comparison with similar Chess.com members.")
-        rating_panel.addWidget(rating_band_title)
         self.chesscom_opponent_bands=QTableWidget(0,6);self.chesscom_opponent_bands.setHorizontalHeaderLabels(["Opponent rating","Games","W–D–L","Actual score","Expected","Difference"])
-        self._configure_chesscom_table(self.chesscom_opponent_bands);self.chesscom_opponent_bands.setMaximumHeight(160);rating_panel.addWidget(self.chesscom_opponent_bands)
-        split_insights.addLayout(color_panel,1);split_insights.addLayout(rating_panel,1);layout.addLayout(split_insights)
-        geography_title=QLabel("OPPONENT COUNTRIES · PUBLIC PROFILE DATA");geography_title.setObjectName("SectionTitle");layout.addWidget(geography_title)
-        geography_note=QLabel("Country is the country opponents selected on their Chess.com profiles. Click Lookup opponent countries to fetch missing public profile details.");geography_note.setObjectName("Muted");geography_note.setWordWrap(True);layout.addWidget(geography_note)
+        self._configure_chesscom_table(self.chesscom_opponent_bands);self.chesscom_opponent_bands.setMaximumHeight(160)
+        self.chesscom_performance_tables=ResponsiveTableGrid();self.chesscom_performance_tables.setObjectName("ChessComPerformanceTables")
+        self.chesscom_performance_tables.add_table("PERFORMANCE BY TIME CONTROL",self.chesscom_controls)
+        self.chesscom_performance_tables.add_table("RESULTS BY COLOR",self.chesscom_colors)
+        self.chesscom_performance_tables.add_table("RESULT VS RATING EXPECTATION",self.chesscom_opponent_bands)
+        layout.addWidget(self.chesscom_performance_tables)
+        geography_note=QLabel("Country is selected by opponents on their Chess.com profiles. Lookup fetches missing public profile details.")
+        geography_note.setObjectName("Muted");geography_note.setWordWrap(True)
         self.chesscom_geography=QTableWidget(0,5);self.chesscom_geography.setHorizontalHeaderLabels(["Country","Games","W–D–L","Score","Review accuracy"])
-        self._configure_chesscom_table(self.chesscom_geography);self.chesscom_geography.setMaximumHeight(240);layout.addWidget(self.chesscom_geography)
-        country_actions=QHBoxLayout();self.chesscom_country_lookup=QPushButton("Lookup opponent countries");self.chesscom_country_lookup.clicked.connect(self.lookup_chesscom_opponent_countries);country_actions.addWidget(self.chesscom_country_lookup)
-        self.chesscom_country_cancel=QPushButton("Stop lookups");self.chesscom_country_cancel.clicked.connect(self.cancel_chesscom_country_lookup);self.chesscom_country_cancel.setVisible(False);country_actions.addWidget(self.chesscom_country_cancel);country_actions.addStretch();layout.addLayout(country_actions)
-        result_title=QLabel("HOW GAMES ENDED");result_title.setObjectName("SectionTitle");layout.addWidget(result_title)
+        self._configure_chesscom_table(self.chesscom_geography);self.chesscom_geography.setMaximumHeight(240)
+        self.chesscom_country_lookup=QPushButton("Lookup countries");self.chesscom_country_lookup.clicked.connect(self.lookup_chesscom_opponent_countries)
+        self.chesscom_country_cancel=QPushButton("Stop lookups");self.chesscom_country_cancel.clicked.connect(self.cancel_chesscom_country_lookup);self.chesscom_country_cancel.setVisible(False)
         self.chesscom_termination=QTableWidget(0,4);self.chesscom_termination.setHorizontalHeaderLabels(["Termination","Games","W–D–L","Share"])
-        self._configure_chesscom_table(self.chesscom_termination);self.chesscom_termination.setMaximumHeight(240);layout.addWidget(self.chesscom_termination)
-        calendar_title=QLabel("RESULTS BY DAY AND TIME");calendar_title.setObjectName("SectionTitle");layout.addWidget(calendar_title)
+        self._configure_chesscom_table(self.chesscom_termination);self.chesscom_termination.setMaximumHeight(240)
         self.chesscom_calendar=QTableWidget(0,5);self.chesscom_calendar.setHorizontalHeaderLabels(["Day / local time","Games","W–D–L","Score","Review accuracy"])
-        self._configure_chesscom_table(self.chesscom_calendar);self.chesscom_calendar.setMaximumHeight(330);layout.addWidget(self.chesscom_calendar)
+        self._configure_chesscom_table(self.chesscom_calendar);self.chesscom_calendar.setMaximumHeight(330)
+        self.chesscom_context_tables=ResponsiveTableGrid();self.chesscom_context_tables.setObjectName("ChessComContextTables")
+        self.chesscom_context_tables.add_table("OPPONENT COUNTRIES",self.chesscom_geography,(geography_note,))
+        self.chesscom_context_tables.add_table("HOW GAMES ENDED",self.chesscom_termination)
+        self.chesscom_context_tables.add_table("RESULTS BY DAY AND TIME",self.chesscom_calendar);layout.addWidget(self.chesscom_context_tables)
         review_title=QLabel("REVIEWED PLAY · PHASES, TACTICS, AND MOVE LABELS");review_title.setObjectName("SectionTitle");layout.addWidget(review_title)
         move_accuracy_title=QLabel("ACCURACY BY MOVE NUMBER");move_accuracy_title.setObjectName("SectionTitle");layout.addWidget(move_accuracy_title)
         self.chesscom_move_accuracy_chart=ChessComAccuracyChart("per move number");layout.addWidget(self.chesscom_move_accuracy_chart)
-        piece_accuracy_title=QLabel("ACCURACY BY PIECE");piece_accuracy_title.setObjectName("SectionTitle");layout.addWidget(piece_accuracy_title)
+        piece_accuracy_title=QLabel("ACCURACY BY PIECE");piece_accuracy_title.setObjectName("SectionTitle")
         self.chesscom_piece_accuracy=QTableWidget(0,3);self.chesscom_piece_accuracy.setHorizontalHeaderLabels(["Piece","Reviewed moves","Average accuracy"])
-        self._configure_chesscom_table(self.chesscom_piece_accuracy);self.chesscom_piece_accuracy.setMaximumHeight(190);layout.addWidget(self.chesscom_piece_accuracy)
-        castling_header=QHBoxLayout();castling_title=QLabel("CASTLING TIMING AND RESULTS · CLICK A ROW TO FILTER GAMES");castling_title.setObjectName("SectionTitle");castling_header.addWidget(castling_title,1)
-        self.chesscom_castling_scan=QPushButton("Quick scan");self.chesscom_castling_scan.setEnabled(False);self.chesscom_castling_scan.setToolTip("Read saved Chess.com PGNs to find when castling happened. No engine review is run.");self.chesscom_castling_scan.clicked.connect(self.quick_scan_chesscom_castling);castling_header.addWidget(self.chesscom_castling_scan)
-        self.chesscom_castling_scan_status=QLabel("Scans are saved and reused across dashboard refreshes.");self.chesscom_castling_scan_status.setObjectName("Muted");castling_header.addWidget(self.chesscom_castling_scan_status);layout.addLayout(castling_header)
-        self.chesscom_castling_scan_progress=QProgressBar();self.chesscom_castling_scan_progress.setVisible(False);layout.addWidget(self.chesscom_castling_scan_progress)
+        self._configure_chesscom_table(self.chesscom_piece_accuracy);self.chesscom_piece_accuracy.setMaximumHeight(190)
+        self.chesscom_castling_scan=QPushButton("Quick castling scan");self.chesscom_castling_scan.setEnabled(False)
+        self.chesscom_castling_scan.setToolTip("Read saved Chess.com PGNs to find when castling happened. No engine review is run.")
+        self.chesscom_castling_scan.clicked.connect(self.quick_scan_chesscom_castling)
+        self.chesscom_castling_scan_status=QLabel("Scans are saved and reused across dashboard refreshes.");self.chesscom_castling_scan_status.setObjectName("Muted")
+        self.chesscom_castling_scan_progress=QProgressBar();self.chesscom_castling_scan_progress.setVisible(False)
         self.chesscom_castling=QTableWidget(0,4);self.chesscom_castling.setHorizontalHeaderLabels(["Castling","Games","W–D–L","Score"])
         self._configure_chesscom_table(self.chesscom_castling);self.chesscom_castling.setMaximumHeight(190)
-        self.chesscom_castling.cellClicked.connect(self._filter_chesscom_library_by_castling);layout.addWidget(self.chesscom_castling)
+        self.chesscom_castling.cellClicked.connect(self._filter_chesscom_library_by_castling)
+        self.chesscom_review_insights=QTableWidget(0,4);self.chesscom_review_insights.setHorizontalHeaderLabels(["Measure","Games / moves","Average / count","Share"])
+        self._configure_chesscom_table(self.chesscom_review_insights);self.chesscom_review_insights.setMaximumHeight(260)
+        self.chesscom_review_tables=ResponsiveTableGrid();self.chesscom_review_tables.setObjectName("ChessComReviewTables")
+        self.chesscom_review_tables.add_table("ACCURACY BY PIECE",self.chesscom_piece_accuracy)
+        self.chesscom_review_tables.add_table("CASTLING TIMING · CLICK A ROW TO FILTER GAMES",self.chesscom_castling,
+                                              (self.chesscom_castling_scan_status,self.chesscom_castling_scan_progress))
+        self.chesscom_review_tables.add_table("REVIEW PATTERNS",self.chesscom_review_insights);layout.addWidget(self.chesscom_review_tables)
         shape_header=QHBoxLayout();shape_title=QLabel("GAME FLOW PATTERNS");shape_title.setObjectName("SectionTitle");shape_header.addWidget(shape_title,1)
         shape_header.addWidget(QLabel("Trace"));self.chesscom_shape_pattern=QComboBox();self.chesscom_shape_pattern.setMinimumWidth(210)
         self.chesscom_shape_pattern.currentTextChanged.connect(self._set_chesscom_shape_pattern);shape_header.addWidget(self.chesscom_shape_pattern);layout.addLayout(shape_header)
         shape_note=QLabel("Estimated from local engine review traces; the chart shows average user-side expected score through the selected pattern. Shares use reviewed games with at least three evaluation points. Chess.com’s game-shape labels are proprietary.");shape_note.setObjectName("Muted");shape_note.setWordWrap(True);layout.addWidget(shape_note)
         self.chesscom_shape_chart=ChessComShapeChart();layout.addWidget(self.chesscom_shape_chart)
         self.chesscom_game_shapes=QTableWidget(0,5);self.chesscom_game_shapes.setHorizontalHeaderLabels(["Pattern","Games","Share","W–D–L","Average accuracy"])
-        self._configure_chesscom_table(self.chesscom_game_shapes);self.chesscom_game_shapes.setMaximumHeight(230);layout.addWidget(self.chesscom_game_shapes)
-        self.chesscom_review_insights=QTableWidget(0,4);self.chesscom_review_insights.setHorizontalHeaderLabels(["Measure","Games / moves","Average / count","Share"])
-        self._configure_chesscom_table(self.chesscom_review_insights);self.chesscom_review_insights.setMaximumHeight(260);layout.addWidget(self.chesscom_review_insights)
-        tactic_examples_title=QLabel("TACTICAL REVIEW EXAMPLES · DOUBLE-CLICK TO REVIEW");tactic_examples_title.setObjectName("SectionTitle");layout.addWidget(tactic_examples_title)
+        self._configure_chesscom_table(self.chesscom_game_shapes);self.chesscom_game_shapes.setMaximumHeight(230)
+        tactic_examples_title=QLabel("TACTICAL REVIEW EXAMPLES · DOUBLE-CLICK TO REVIEW");tactic_examples_title.setObjectName("SectionTitle")
         self.chesscom_tactic_examples=QTableWidget(0,5);self.chesscom_tactic_examples.setHorizontalHeaderLabels(["Finding","Date","Side","Move","Game / detail"])
         self._configure_chesscom_table(self.chesscom_tactic_examples);self.chesscom_tactic_examples.setMaximumHeight(330)
-        self.chesscom_tactic_examples.cellDoubleClicked.connect(self._open_chesscom_tactic_example);layout.addWidget(self.chesscom_tactic_examples)
+        self.chesscom_tactic_examples.cellDoubleClicked.connect(self._open_chesscom_tactic_example)
+        self.chesscom_example_tables=ResponsiveTableGrid();self.chesscom_example_tables.setObjectName("ChessComExampleTables")
+        self.chesscom_example_tables.add_table("GAME FLOW PATTERNS",self.chesscom_game_shapes)
+        self.chesscom_example_tables.add_table("TACTICAL REVIEW EXAMPLES",self.chesscom_tactic_examples);layout.addWidget(self.chesscom_example_tables)
         opening_title=QLabel("OPENING RESULTS");opening_title.setObjectName("SectionTitle");layout.addWidget(opening_title)
         self.chesscom_opening_mastery=QLabel("Opening mastery estimate uses the loaded local opening database.")
         self.chesscom_opening_mastery.setObjectName("ReviewSummary");self.chesscom_opening_mastery.setWordWrap(True)
@@ -435,6 +482,13 @@ class ProfileDialog(QWidget):
         self.chesscom_review_unreviewed=QPushButton("Review all unreviewed");self.chesscom_review_unreviewed.clicked.connect(self.review_unreviewed_chesscom);library_actions.addWidget(self.chesscom_review_unreviewed)
         self.chesscom_folder=QPushButton("Open PGN folder");self.chesscom_folder.clicked.connect(self.open_chesscom_folder);library_actions.addWidget(self.chesscom_folder)
         self.chesscom_delete=QPushButton("Remove selected");self.chesscom_delete.clicked.connect(self.delete_selected_chesscom);library_actions.addWidget(self.chesscom_delete);library_actions.addStretch();layout.addLayout(library_actions)
+        pgn_header.removeWidget(self.chesscom_pgn_stats_rescan);library_actions.removeWidget(self.chesscom_review_unreviewed)
+        for action in (self.chesscom_pgn_stats_rescan,self.chesscom_castling_scan,self.chesscom_country_lookup,
+                       self.chesscom_country_cancel,self.chesscom_review_unreviewed):quick_actions.addWidget(action)
+        self.chesscom_top_action_buttons=(self.chesscom_pgn_stats_rescan,self.chesscom_castling_scan,
+                                          self.chesscom_country_lookup,self.chesscom_country_cancel,
+                                          self.chesscom_review_unreviewed)
+        quick_actions.addStretch()
         scroll.setWidget(page);self.chesscom_scroll=scroll;self.tabs.addTab(scroll,"Chess.com")
         self._chesscom_archives=[];self._chesscom_available_games=[];self._chesscom_worker=None;self._chesscom_known_game_ids=set();self._chesscom_latest_game_month="";self._castling_scan_worker=None;self._pgn_stats_worker=None;self._chesscom_pgn_stats_records=[];self._chesscom_pgn_stats_summary="";self._chesscom_castling_scan_records=[];self._chesscom_castling_scan_summary="";self._chesscom_download_errors=0;self._chesscom_review_cache={};self._chesscom_pgn_header_cache={};self._chesscom_opening_mastery_cache={};self._chesscom_book_positions_cache=(None,set());self._chesscom_opening_trend_data={}
         self._chesscom_data_loaded=False
