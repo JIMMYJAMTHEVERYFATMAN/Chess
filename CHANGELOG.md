@@ -1,5 +1,18 @@
 # Changelog
 
+## [v2.1.1.0] - 2026-11-05
+
+### Added
+
+- Profile → Settings can switch the app interface between English and Czech.
+- Endgame Trainer shows a checkmate failure dialog with an option to restart the original position.
+- Main tabs display an animated shadow loading card while profile and opening data load asynchronously.
+
+### Fixed
+
+- Opening Trainer matches Chess.com history to repertoire lines by ECO code, even when opening names differ between databases.
+- Opening Trainer no longer rebuilds its full repertoire list on every visit, and adds large choice lists in batches.
+
 ## [v2.1.0.0] - 2026-11-05
 
 ### Added
