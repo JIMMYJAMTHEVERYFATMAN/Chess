@@ -58,6 +58,31 @@ class _ChesscomGamesWorker(QThread):
         except Exception:games=[]
         self.loaded.emit(self.generation,games)
 
+
+class _ChesscomPGNInsightsWorker(QThread):
+    loaded=pyqtSignal(int,object,object)
+
+    def __init__(self,generation,jobs,book_positions,parent=None):
+        super().__init__(parent);self.generation=generation;self.jobs=jobs
+        self.book_positions=book_positions
+
+    def run(self):
+        headers={};depths={}
+        for game_id,path,color,cache_key,need_header,need_depth in self.jobs:
+            if self.isInterruptionRequested():break
+            if need_header:
+                value=""
+                try:
+                    with Path(path).open("r",encoding="utf-8-sig") as source:
+                        value=str(chess.pgn.read_headers(source).get("Termination", ""))
+                except Exception:pass
+                headers[path]=value
+            if need_depth:
+                try:depth=local_opening_exit_depth(path,color,self.book_positions)
+                except Exception:depth=None
+                depths[(game_id,cache_key)]=depth
+        self.loaded.emit(self.generation,headers,depths)
+
 class ResponsiveTableGrid(QWidget):
     """Lay related summary tables out in up to three equal-width panels."""
     def __init__(self,parent=None):
@@ -96,6 +121,7 @@ class ProfileDialog(QWidget):
         super().__init__(parent);self.store=store;self.open_game_callback=open_game_callback;self.theme_changed_callback=theme_changed_callback;self.presentation_changed_callback=presentation_changed_callback
         self._profile_refresh_generation=0;self._profile_refresh_worker=None;self._profile_refresh_pending=False
         self._chesscom_games_generation=0;self._chesscom_games_worker=None;self._chesscom_games_pending=None
+        self._closing=False
         root_layout=QVBoxLayout(self);self.tabs=QTabWidget();root_layout.addWidget(self.tabs)
         self._profile_loading_tasks={};self._build_loading_overlay()
         overview_page=QWidget();layout=QVBoxLayout(overview_page);self.tabs.addTab(overview_page,"Overview")
@@ -331,7 +357,7 @@ class ProfileDialog(QWidget):
         username=self.chesscom_username.text().strip()
         if not username:return
         self.chesscom_status.setText("Loading Chess.com insights and downloaded games…")
-        self.refresh_chesscom_library_async(username)
+        self.refresh_chesscom_library(username)
 
     def _finish_chesscom_initial_load(self,username):
         self.refresh_chesscom_library(username)
@@ -350,7 +376,7 @@ class ProfileDialog(QWidget):
         note.setObjectName("Muted");note.setWordWrap(True);layout.addWidget(note)
         account_row=QHBoxLayout();self.chesscom_username=QLineEdit(self.store.get_setting("chesscom_username",""))
         self.chesscom_username.setPlaceholderText("Chess.com username");self.chesscom_username.setClearButtonEnabled(True)
-        self.chesscom_username.editingFinished.connect(lambda:self.refresh_chesscom_library(self.chesscom_username.text()))
+        self.chesscom_username.editingFinished.connect(lambda:self.refresh_chesscom_library_async(self.chesscom_username.text()))
         account_row.addWidget(self.chesscom_username,1);self.chesscom_connect=QPushButton("Find archives");self.chesscom_connect.clicked.connect(self.find_chesscom_archives);account_row.addWidget(self.chesscom_connect)
         account_row.addWidget(QLabel("Month"));self.chesscom_month=QComboBox();self.chesscom_month.setMinimumWidth(140);self.chesscom_month.currentIndexChanged.connect(self.load_chesscom_month);account_row.addWidget(self.chesscom_month)
         self.chesscom_download_all=QPushButton("Download all months");self.chesscom_download_all.clicked.connect(self.download_all_chesscom);account_row.addWidget(self.chesscom_download_all)
@@ -535,7 +561,7 @@ class ProfileDialog(QWidget):
                                           self.chesscom_review_unreviewed)
         quick_actions.addStretch()
         scroll.setWidget(page);self.chesscom_scroll=scroll;self.tabs.addTab(scroll,"Chess.com")
-        self._chesscom_archives=[];self._chesscom_available_games=[];self._chesscom_worker=None;self._chesscom_known_game_ids=set();self._chesscom_latest_game_month="";self._castling_scan_worker=None;self._pgn_stats_worker=None;self._chesscom_pgn_stats_records=[];self._chesscom_pgn_stats_summary="";self._chesscom_castling_scan_records=[];self._chesscom_castling_scan_summary="";self._chesscom_download_errors=0;self._chesscom_review_cache={};self._chesscom_pgn_header_cache={};self._chesscom_opening_mastery_cache={};self._chesscom_book_positions_cache=(None,set());self._chesscom_opening_trend_data={}
+        self._chesscom_archives=[];self._chesscom_available_games=[];self._chesscom_worker=None;self._chesscom_known_game_ids=set();self._chesscom_latest_game_month="";self._castling_scan_worker=None;self._pgn_stats_worker=None;self._pgn_insights_worker=None;self._pgn_insights_pending=None;self._pgn_insights_generation=0;self._chesscom_pgn_stats_records=[];self._chesscom_pgn_stats_summary="";self._chesscom_castling_scan_records=[];self._chesscom_castling_scan_summary="";self._chesscom_download_errors=0;self._chesscom_review_cache={};self._chesscom_pgn_header_cache={};self._chesscom_opening_mastery_cache={};self._chesscom_book_positions_cache=(None,set());self._chesscom_opening_trend_data={};self._chesscom_opening_row_by_key={}
         self._chesscom_data_loaded=False
 
     @staticmethod
@@ -571,7 +597,7 @@ class ProfileDialog(QWidget):
 
     def find_chesscom_archives(self):
         self._chesscom_available_games=[];self.chesscom_available.setRowCount(0);self.chesscom_month.clear()
-        self.refresh_chesscom_library(self.chesscom_username.text())
+        self.refresh_chesscom_library_async(self.chesscom_username.text())
         self.chesscom_status.setText("Looking up public archives…");self._start_chesscom_worker("archives")
 
     def _chesscom_archives_loaded(self,archives):
@@ -621,7 +647,7 @@ class ProfileDialog(QWidget):
             try:self.store.save_chesscom_game(username,game);saved+=1
             except Exception as exc:errors.append(str(exc))
         self._chesscom_download_errors+=len(errors)
-        if refresh:self.refresh_chesscom_library(username)
+        if refresh:self.refresh_chesscom_library_async(username)
         text=f"Saved {saved} game{'s' if saved!=1 else ''} in {self.store.chesscom_root(username)}."
         if errors:text+=f" {len(errors)} entry/entries were skipped: {errors[0]}"
         self.chesscom_status.setText(text)
@@ -670,13 +696,13 @@ class ProfileDialog(QWidget):
     def _chesscom_all_finished(self):
         text=(f"All archive months checked. {self._chesscom_download_errors} game(s) could not be saved."
               if self._chesscom_download_errors else "All available public games have been downloaded.")
-        self.chesscom_status.setText(text);self.refresh_chesscom_library(self.chesscom_username.text())
+        self.chesscom_status.setText(text);self.refresh_chesscom_library_async(self.chesscom_username.text())
 
     def _chesscom_update_finished(self):
         worker=self._chesscom_worker
         added=worker.new_games_added if worker else 0
         checked=worker.archives_checked if worker else 0
-        self.refresh_chesscom_library(self.chesscom_username.text())
+        self.refresh_chesscom_library_async(self.chesscom_username.text())
         text=(f"Update complete: found {added:,} new game(s) after checking {checked:,} archive month(s)."
               if added else f"Update complete: no new games found in {checked:,} archive month(s).")
         if self._chesscom_download_errors:text+=f" {self._chesscom_download_errors} game(s) could not be saved."
@@ -685,15 +711,17 @@ class ProfileDialog(QWidget):
     def _chesscom_fetch_failed(self,message):self.chesscom_status.setText(message)
 
     def _chesscom_worker_finished(self):
-        worker=self.sender()
-        if worker is not self._chesscom_worker:return
+        self._finish_chesscom_worker(self.sender())
+
+    def _finish_chesscom_worker(self,worker):
         loading_token=getattr(worker,"_profile_loading_token",None)
-        self._chesscom_worker=None;self.chesscom_username.setEnabled(True);self.chesscom_connect.setEnabled(True);self.chesscom_download_all.setEnabled(True)
-        self.chesscom_update_downloads.setEnabled(bool(self._chesscom_known_game_ids))
-        self.chesscom_month.setEnabled(True);self.chesscom_available.setEnabled(True)
-        self.chesscom_download_selected.setEnabled(True);self.chesscom_download_month.setEnabled(True);self.chesscom_country_lookup.setEnabled(True)
-        self.chesscom_progress.setVisible(False)
-        self.chesscom_country_cancel.setVisible(False)
+        if worker is self._chesscom_worker:
+            self._chesscom_worker=None;self.chesscom_username.setEnabled(True);self.chesscom_connect.setEnabled(True);self.chesscom_download_all.setEnabled(True)
+            self.chesscom_update_downloads.setEnabled(bool(self._chesscom_known_game_ids))
+            self.chesscom_month.setEnabled(True);self.chesscom_available.setEnabled(True)
+            self.chesscom_download_selected.setEnabled(True);self.chesscom_download_month.setEnabled(True);self.chesscom_country_lookup.setEnabled(True)
+            self.chesscom_progress.setVisible(False)
+            self.chesscom_country_cancel.setVisible(False)
         self.end_profile_loading(loading_token)
 
     def cancel_chesscom_country_lookup(self):
@@ -724,7 +752,7 @@ class ProfileDialog(QWidget):
     def _chesscom_countries_finished(self,completed,total):
         state="finished" if completed>=total else "stopped"
         self.chesscom_status.setText(f"Country lookup {state} · checked {completed:,} of {total:,} opponent profiles.")
-        self.refresh_chesscom_library(self.chesscom_username.text())
+        self.refresh_chesscom_library_async(self.chesscom_username.text())
 
     def _set_chesscom_shape_pattern(self,pattern):
         if hasattr(self,"chesscom_shape_chart"):
@@ -755,7 +783,7 @@ class ProfileDialog(QWidget):
 
     def _refresh_chesscom_from_filters(self,*_args):
         self._chesscom_library_page=0
-        self.refresh_chesscom_library(self.chesscom_username.text())
+        self.refresh_chesscom_library_async(self.chesscom_username.text())
 
     def _change_chesscom_library_page(self,offset):
         self._chesscom_library_page=max(0,self._chesscom_library_page+int(offset))
@@ -803,18 +831,25 @@ class ProfileDialog(QWidget):
         page_start=self._chesscom_library_page*page_size
         page_games=library_matches[page_start:page_start+page_size]
         self.chesscom_library.setUpdatesEnabled(False)
-        self.chesscom_library.setRowCount(0)
-        for game in page_games:
-            try:pgn_path=Path(game["pgn_path"]);present=pgn_path.is_file()
-            except (TypeError,OSError):present=False
-            values=(game["played_at"][:16].replace("T"," "),game["opponent"],game["result"],
-                    game["time_control"],str(game["player_rating"] or "—"),game["opening"] or "—",
-                    "Reviewed" if game["reviewed"] else "Not reviewed",game["rules"] or "chess",
-                    "Saved" if present else "No PGN")
-            row=self.chesscom_library.rowCount();self.chesscom_library.insertRow(row)
-            for column,text in enumerate(values):self.chesscom_library.setItem(row,column,QTableWidgetItem(text))
-            self.chesscom_library.item(row,0).setData(Qt.ItemDataRole.UserRole,game)
-        self.chesscom_library.setUpdatesEnabled(True);self.chesscom_library.viewport().update()
+        try:
+            self.chesscom_library.setRowCount(0)
+            for source_game in page_games:
+                game=source_game if isinstance(source_game,dict) else {}
+                try:pgn_path=Path(game.get("pgn_path") or "");present=pgn_path.is_file()
+                except (TypeError,OSError):present=False
+                played_at=game.get("played_at")
+                played_label=played_at[:16].replace("T"," ") if isinstance(played_at,str) else "Unknown date"
+                values=(played_label,str(game.get("opponent") or "Unknown"),str(game.get("result") or "—"),
+                        str(game.get("time_control") or "—"),str(game.get("player_rating") or "—"),
+                        str(game.get("opening") or "—"),
+                        "Reviewed" if game.get("reviewed") else "Not reviewed",
+                        str(game.get("rules") or "chess"),"Saved" if present else "No PGN")
+                row=self.chesscom_library.rowCount();self.chesscom_library.insertRow(row)
+                for column,text in enumerate(values):self.chesscom_library.setItem(row,column,QTableWidgetItem(text))
+                self.chesscom_library.item(row,0).setData(Qt.ItemDataRole.UserRole,game)
+        finally:
+            self.chesscom_library.setUpdatesEnabled(True)
+            self.chesscom_library.viewport().update()
         first=page_start+1 if library_matches else 0
         last=page_start+len(page_games)
         label=f"Showing {first:,}–{last:,} of {len(library_matches):,} matching games · 100 per page"
@@ -861,7 +896,7 @@ class ProfileDialog(QWidget):
         if self.sender() is not self._castling_scan_worker:return
         self._castling_scan_worker=None;self.chesscom_castling_scan_progress.setVisible(False)
         self.end_profile_loading(getattr(self.sender(),"_profile_loading_token",None))
-        self.refresh_chesscom_library(self.chesscom_username.text())
+        self.refresh_chesscom_library_async(self.chesscom_username.text())
         if self._chesscom_castling_scan_summary:
             self.chesscom_castling_scan_status.setText(self._chesscom_castling_scan_summary)
 
@@ -877,7 +912,6 @@ class ProfileDialog(QWidget):
         self.chesscom_pgn_stats_progress.setRange(0,len(records));self.chesscom_pgn_stats_progress.setValue(0)
         self.chesscom_pgn_stats_progress.setVisible(True)
         worker=ChessComPgnStatsWorker(records,self);self._pgn_stats_worker=worker
-        worker._profile_loading_token=self.begin_profile_loading("Reading saved PGNs…")
         worker.progress.connect(self._chesscom_pgn_stats_progress)
         worker.scan_done.connect(self._chesscom_pgn_stats_done)
         worker.finished.connect(self._chesscom_pgn_stats_worker_finished)
@@ -898,8 +932,7 @@ class ProfileDialog(QWidget):
     def _chesscom_pgn_stats_worker_finished(self):
         if self.sender() is not self._pgn_stats_worker:return
         self._pgn_stats_worker=None;self.chesscom_pgn_stats_progress.setVisible(False)
-        self.end_profile_loading(getattr(self.sender(),"_profile_loading_token",None))
-        self.refresh_chesscom_library(self.chesscom_username.text())
+        self.refresh_chesscom_library_async(self.chesscom_username.text())
         if self._chesscom_pgn_stats_summary:
             self.chesscom_pgn_stats_status.setText(self._chesscom_pgn_stats_summary)
 
@@ -954,6 +987,7 @@ class ProfileDialog(QWidget):
         self._apply_chesscom_library(games)
 
     def refresh_chesscom_library_async(self,username):
+        if self._closing:return
         if not isinstance(username,str):username=self.chesscom_username.text()
         if self._chesscom_games_worker and self._chesscom_games_worker.isRunning():
             self._chesscom_games_pending=username
@@ -980,9 +1014,11 @@ class ProfileDialog(QWidget):
         self._chesscom_games_worker=None
         if self._chesscom_games_pending is not None:
             username=self._chesscom_games_pending;self._chesscom_games_pending=None
-            self.refresh_chesscom_library(username)
+            self.refresh_chesscom_library_async(username)
 
     def _apply_chesscom_library(self,games):
+        self._pgn_insights_generation+=1
+        insight_generation=self._pgn_insights_generation
         self.chesscom_library.setRowCount(0);self.chesscom_openings.setRowCount(0)
         self.chesscom_opening_results_chart.set_values([]);self.chesscom_opening_accuracy_chart.set_values([])
         self.chesscom_controls.setRowCount(0);self.chesscom_colors.setRowCount(0)
@@ -1169,6 +1205,7 @@ class ProfileDialog(QWidget):
         self.chesscom_move_accuracy_chart.set_values([(f"Move {number}",sum(values)/len(values),len(values))
             for number,values in sorted(move_accuracy.items())])
         opening_depth_by_id={}
+        opening_key=None;book_positions=set()
         openings=getattr(self._owner_window(),"openings",[])
         if not openings:
             self.chesscom_opening_mastery.setText("Load the Lichess opening database to estimate how many book moves you play before leaving a line.")
@@ -1184,16 +1221,11 @@ class ProfileDialog(QWidget):
                     if game.get("rules","chess")!="chess":continue
                     path=str(game.get("pgn_path") or "")
                     if not path:continue
-                    try:
-                        stat=Path(path).stat();cache_key=(path,stat.st_mtime_ns,stat.st_size,opening_key)
+                    try:stat=Path(path).stat();cache_key=(path,stat.st_mtime_ns,stat.st_size,opening_key)
                     except OSError:continue
-                    if cache_key not in self._chesscom_opening_mastery_cache:
-                        self._chesscom_opening_mastery_cache[cache_key]=local_opening_exit_depth(
-                            path,game.get("user_color"),book_positions)
-                    depth=self._chesscom_opening_mastery_cache[cache_key]
+                    depth=self._chesscom_opening_mastery_cache.get(cache_key)
                     if depth is not None:
-                        mastery_depths.append(depth)
-                        opening_depth_by_id[game.get("game_id")]=depth
+                        mastery_depths.append(depth);opening_depth_by_id[game.get("game_id")]=depth
             if mastery_depths:
                 average_depth=sum(mastery_depths)/len(mastery_depths)
                 self.chesscom_opening_mastery.setText(
@@ -1201,7 +1233,7 @@ class ProfileDialog(QWidget):
                     f"{len(mastery_depths):,} games, after an average of {average_depth:.1f} of your book moves. "
                     "This uses the loaded Lichess database; Chess.com’s own book may differ.")
             elif book_positions:
-                self.chesscom_opening_mastery.setText("No games in this period had a detected first exit by your move in the loaded Lichess opening lines.")
+                self.chesscom_opening_mastery.setText("Calculating local opening mastery from downloaded PGNs…")
             else:
                 self.chesscom_opening_mastery.setText("The loaded opening database has no usable lines for a mastery estimate.")
         opening_counts=Counter(game["opening"] for game in selected_games
@@ -1232,8 +1264,10 @@ class ProfileDialog(QWidget):
             color_rows=sorted(((key,data) for key,data in opening_results.items() if key[1]==color),
                               key=lambda item:(-item[1]["games"],item[0][0]))
             opening_rows.extend(color_rows)
+        self._chesscom_opening_row_by_key={}
         for (opening,color),data in opening_rows:
             row=self.chesscom_openings.rowCount();self.chesscom_openings.insertRow(row)
+            self._chesscom_opening_row_by_key[(opening,color)]=row
             opening_score_text=f"{100*data['points']/data['scored']:.0f}%" if data["scored"] else "—"
             accuracy=f"{sum(data['accuracy'])/len(data['accuracy']):.0f}%" if data["accuracy"] else "—"
             book_depth=(f"{sum(data['book_depths'])/len(data['book_depths']):.1f} ({len(data['book_depths'])} games)"
@@ -1408,40 +1442,8 @@ class ProfileDialog(QWidget):
             row=self.chesscom_geography.rowCount();self.chesscom_geography.insertRow(row)
             for column,text in enumerate(cells):self.chesscom_geography.setItem(row,column,QTableWidgetItem(text))
 
-        termination_groups={}
-        for game in selected_games:
-            path=str(game.get("pgn_path") or "")
-            raw_termination=self._chesscom_pgn_header_cache.get(path)
-            if raw_termination is None:
-                raw_termination=""
-                if path:
-                    try:
-                        with Path(path).open("r",encoding="utf-8-sig") as source:
-                            raw_termination=str(chess.pgn.read_headers(source).get("Termination", ""))
-                    except (OSError,UnicodeError,ValueError):pass
-                self._chesscom_pgn_header_cache[path]=raw_termination
-            phrase=raw_termination.casefold()
-            reason=("Timeout vs insufficient material" if "timeout" in phrase and "insufficient" in phrase else
-                    "Checkmate" if "checkmate" in phrase else
-                    "Resignation" if "resign" in phrase else
-                    "Timeout" if any(word in phrase for word in ("timeout","time forfeit","on time","time ran out")) else
-                    "Abandonment" if "abandon" in phrase else
-                    "Repetition" if "repetition" in phrase else
-                    "Stalemate" if "stalemate" in phrase else
-                    "Insufficient material" if "insufficient" in phrase else
-                    "Agreement" if "agreement" in phrase else
-                    "Move-count rule" if any(word in phrase for word in ("50-move","75-move","fifty-move","seventy-five","move rule")) else
-                    "Unspecified")
-            result=game.get("user_result")
-            outcome="Win" if result==1 else "Draw" if result==.5 else "Loss" if result==0 else "Unknown result"
-            label=f"{outcome} · {reason}"
-            data=termination_groups.setdefault(label,{"games":0,"wins":0,"draws":0,"losses":0})
-            data["games"]+=1;data["wins"]+=result==1;data["draws"]+=result==.5;data["losses"]+=result==0
-        for label,data in sorted(termination_groups.items(),key=lambda item:(-item[1]["games"],item[0])):
-            share=f"{data['games']/len(selected_games)*100:.1f}%" if selected_games else "—"
-            cells=(label,str(data["games"]),f"{data['wins']}–{data['draws']}–{data['losses']}",share)
-            row=self.chesscom_termination.rowCount();self.chesscom_termination.insertRow(row)
-            for column,text in enumerate(cells):self.chesscom_termination.setItem(row,column,QTableWidgetItem(text))
+        self._chesscom_selected_insight_games=list(selected_games)
+        self._fill_chesscom_termination_table(selected_games)
 
         calendar_groups={}
         calendar_order=["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday",
@@ -1652,6 +1654,105 @@ class ProfileDialog(QWidget):
         self.chesscom_trends.setText(
             f"Showing {len(selected_games)} of {len(available)} downloaded games · {sum(bool(game['reviewed']) for game in selected_games)} reviewed · "
             f"{outcomes['Wins']} wins / {outcomes['Draws']} draws / {outcomes['Losses']} losses. {prediction} {opening_text} {lesson_text} {strength_text}")
+        self._queue_chesscom_pgn_insights(insight_generation,selected_games,book_positions,opening_key)
+
+    def _queue_chesscom_pgn_insights(self,generation,games,book_positions,opening_key):
+        jobs=[];seen_headers=set()
+        for game in games:
+            path=str(game.get("pgn_path") or "")
+            if not path:continue
+            need_header=path not in self._chesscom_pgn_header_cache and path not in seen_headers
+            seen_headers.add(path)
+            cache_key=None;need_depth=False
+            if opening_key is not None and game.get("rules","chess")=="chess":
+                try:
+                    stat=Path(path).stat();cache_key=(path,stat.st_mtime_ns,stat.st_size,opening_key)
+                    need_depth=cache_key not in self._chesscom_opening_mastery_cache
+                except OSError:pass
+            if need_header or need_depth:
+                jobs.append((game.get("game_id"),path,game.get("user_color"),cache_key,need_header,need_depth))
+        if not jobs:return
+        request=(generation,jobs,set(book_positions))
+        worker=self._pgn_insights_worker
+        if worker and worker.isRunning():
+            self._pgn_insights_pending=request
+            return
+        self._start_chesscom_pgn_insights(request)
+
+    def _start_chesscom_pgn_insights(self,request):
+        generation,jobs,book_positions=request
+        worker=_ChesscomPGNInsightsWorker(generation,jobs,book_positions,self)
+        self._pgn_insights_worker=worker
+        worker.loaded.connect(self._chesscom_pgn_insights_loaded)
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(self._chesscom_pgn_insights_finished)
+        worker.start()
+
+    def _chesscom_pgn_insights_loaded(self,generation,headers,depths):
+        self._chesscom_pgn_header_cache.update(headers)
+        for (_game_id,cache_key),depth in depths.items():
+            self._chesscom_opening_mastery_cache[cache_key]=depth
+        if generation!=self._pgn_insights_generation:return
+        self._fill_chesscom_termination_table(self._chesscom_selected_insight_games)
+        self._update_chesscom_opening_mastery(self._chesscom_selected_insight_games)
+
+    def _chesscom_pgn_insights_finished(self):
+        if self.sender() is not self._pgn_insights_worker:return
+        self._pgn_insights_worker=None
+        pending=self._pgn_insights_pending;self._pgn_insights_pending=None
+        if pending:self._start_chesscom_pgn_insights(pending)
+
+    @staticmethod
+    def _termination_reason(raw_termination):
+        phrase=str(raw_termination or "").casefold()
+        return ("Timeout vs insufficient material" if "timeout" in phrase and "insufficient" in phrase else
+                "Checkmate" if "checkmate" in phrase else "Resignation" if "resign" in phrase else
+                "Timeout" if any(word in phrase for word in ("timeout","time forfeit","on time","time ran out")) else
+                "Abandonment" if "abandon" in phrase else "Repetition" if "repetition" in phrase else
+                "Stalemate" if "stalemate" in phrase else "Insufficient material" if "insufficient" in phrase else
+                "Agreement" if "agreement" in phrase else
+                "Move-count rule" if any(word in phrase for word in ("50-move","75-move","fifty-move","seventy-five","move rule")) else
+                "Unspecified")
+
+    def _fill_chesscom_termination_table(self,games):
+        groups={}
+        for game in games:
+            raw=self._chesscom_pgn_header_cache.get(str(game.get("pgn_path") or ""),"")
+            reason=self._termination_reason(raw);result=game.get("user_result")
+            outcome="Win" if result==1 else "Draw" if result==.5 else "Loss" if result==0 else "Unknown result"
+            data=groups.setdefault(f"{outcome} · {reason}",{"games":0,"wins":0,"draws":0,"losses":0})
+            data["games"]+=1;data["wins"]+=result==1;data["draws"]+=result==.5;data["losses"]+=result==0
+        self.chesscom_termination.setRowCount(0)
+        for label,data in sorted(groups.items(),key=lambda item:(-item[1]["games"],item[0])):
+            share=f"{data['games']/len(games)*100:.1f}%" if games else "—"
+            cells=(label,str(data["games"]),f"{data['wins']}–{data['draws']}–{data['losses']}",share)
+            row=self.chesscom_termination.rowCount();self.chesscom_termination.insertRow(row)
+            for column,text in enumerate(cells):self.chesscom_termination.setItem(row,column,QTableWidgetItem(text))
+
+    def _update_chesscom_opening_mastery(self,games):
+        totals={};depths=[]
+        for game in games:
+            if game.get("rules","chess")!="chess":continue
+            path=str(game.get("pgn_path") or "")
+            if not path:continue
+            try:stat=Path(path).stat();key=(path,stat.st_mtime_ns,stat.st_size,self._chesscom_book_positions_cache[0])
+            except OSError:continue
+            depth=self._chesscom_opening_mastery_cache.get(key)
+            if depth is None:continue
+            depths.append(depth);group=(game.get("opening"),game.get("user_color") or "Unknown")
+            totals.setdefault(group,[]).append(depth)
+        for group,row in self._chesscom_opening_row_by_key.items():
+            values=totals.get(group,[])
+            text=f"{sum(values)/len(values):.1f} ({len(values)} games)" if values else "—"
+            item=self.chesscom_openings.item(row,6)
+            if item:item.setText(text)
+        if depths:
+            self.chesscom_opening_mastery.setText(
+                f"Local opening mastery estimate: you were first to leave the Lichess opening lines in "
+                f"{len(depths):,} games, after an average of {sum(depths)/len(depths):.1f} of your book moves. "
+                "This uses the loaded Lichess database; Chess.com’s own book may differ.")
+        elif self._chesscom_book_positions_cache[1]:
+            self.chesscom_opening_mastery.setText("No games in this period had a detected first exit by your move in the loaded Lichess opening lines.")
 
     def _selected_chesscom_records(self):
         return [self.chesscom_library.item(row,0).data(Qt.ItemDataRole.UserRole)
@@ -1694,7 +1795,7 @@ class ProfileDialog(QWidget):
     def delete_selected_chesscom(self):
         records=self._selected_chesscom_records()
         for game in records:self.store.remove_chesscom_game(game["game_id"])
-        self.refresh_chesscom_library(self.chesscom_username.text())
+        self.refresh_chesscom_library_async(self.chesscom_username.text())
 
     def open_chesscom_folder(self):
         try:root=self.store.chesscom_root(self.chesscom_username.text())
@@ -1716,6 +1817,7 @@ class ProfileDialog(QWidget):
         if self.presentation_changed_callback:self.presentation_changed_callback(piece_style,coordinates,animations)
 
     def refresh_async(self):
+        if self._closing:return
         if self._profile_refresh_worker and self._profile_refresh_worker.isRunning():
             self._profile_refresh_pending=True
             return
@@ -1736,9 +1838,11 @@ class ProfileDialog(QWidget):
         self._apply_profile_snapshot(records,high_score)
 
     def _profile_snapshot_loaded(self,generation,records,puzzle_high_score):
-        if generation!=self._profile_refresh_generation:return
-        self._apply_profile_snapshot(records,puzzle_high_score)
-        self.end_profile_loading(getattr(self,"_profile_refresh_loading_token",None))
+        try:
+            if generation!=self._profile_refresh_generation:return
+            self._apply_profile_snapshot(records,puzzle_high_score)
+        finally:
+            self.end_profile_loading(getattr(self,"_profile_refresh_loading_token",None))
 
     def _profile_snapshot_worker_finished(self):
         self._profile_refresh_worker=None
@@ -1870,16 +1974,17 @@ class ProfileDialog(QWidget):
     def clear_all_data(self):
         answer=QMessageBox.question(self,"Delete all saved game data?","Permanently delete local game summaries, reviews, downloaded Chess.com game records and PGN files, plus the puzzle challenge high score? App preferences and your saved Chess.com username will remain.",QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.Cancel,QMessageBox.StandardButton.Cancel)
         if answer==QMessageBox.StandardButton.Yes:
-            self.store.clear_all();self.refresh();self.refresh_chesscom_library(self.chesscom_username.text())
+            self.store.clear_all();self.refresh();self.refresh_chesscom_library_async(self.chesscom_username.text())
 
     def clear_pgn_data(self):
         answer=QMessageBox.question(self,"Delete stored game moves?","Remove all saved PGNs? Review summaries and profile statistics will remain.",QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.Cancel,QMessageBox.StandardButton.Cancel)
         if answer!=QMessageBox.StandardButton.Yes:return
-        self.store.clear_pgns();self.refresh();self.refresh_chesscom_library(self.chesscom_username.text())
+        self.store.clear_pgns();self.refresh();self.refresh_chesscom_library_async(self.chesscom_username.text())
 
     def shutdown_background_workers(self):
+        self._closing=True
         if self._chesscom_worker and self._chesscom_worker.isRunning():self._chesscom_worker.cancel()
-        for worker in (self._profile_refresh_worker,self._chesscom_games_worker):
+        for worker in (self._profile_refresh_worker,self._chesscom_games_worker,self._pgn_insights_worker):
             if worker and worker.isRunning():worker.wait(2000)
         if self._pgn_stats_worker and self._pgn_stats_worker.isRunning():
             self._pgn_stats_worker.requestInterruption();self._pgn_stats_worker.wait(2000)

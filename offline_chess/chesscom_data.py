@@ -506,8 +506,6 @@ class ProfileStore:
         opponent=str(opponent_data.get("username","Unknown"))
         filename=f"{played_at[:10]}_{re.sub(r'[^A-Za-z0-9_-]+','_',opponent)[:24]}_{stable_id}.pgn"
         target=folder/filename;temporary=target.with_suffix(".pgn.tmp")
-        temporary.write_text(game["pgn"].rstrip()+"\n",encoding="utf-8")
-        temporary.replace(target)
         def rating(person):
             try:return int(person.get("rating"))
             except (TypeError,ValueError):return None
@@ -524,20 +522,36 @@ class ProfileStore:
         record=(game_id,username,played_at,result,user_color,user_result,rating(player),opponent,rating(opponent_data),
                 str(game.get("time_control","")),str(game.get("time_class","")),int(bool(game.get("rated",False))),
                 str(game.get("rules","chess")),str(opening),str(target),0,None,chesscom_accuracy,None,"[]",country,int(bool(country)))
-        db=self.connect()
+        previous_pgn=target.read_bytes() if target.exists() else None
         try:
-            db.execute("""INSERT INTO chesscom_games(game_id,username,played_at,result,user_color,user_result,
-                player_rating,opponent,opponent_rating,time_control,time_class,rated,rules,opening,pgn_path,
-                reviewed,user_accuracy,chesscom_accuracy,predicted_elo,review_json,opponent_country,opponent_country_checked)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(game_id) DO UPDATE SET username=excluded.username,played_at=excluded.played_at,
-                result=excluded.result,user_color=excluded.user_color,user_result=excluded.user_result,
-                player_rating=excluded.player_rating,opponent=excluded.opponent,opponent_rating=excluded.opponent_rating,
-                time_control=excluded.time_control,time_class=excluded.time_class,rated=excluded.rated,
-                rules=excluded.rules,opening=excluded.opening,pgn_path=excluded.pgn_path,
-                chesscom_accuracy=COALESCE(excluded.chesscom_accuracy,chesscom_games.chesscom_accuracy)""",record)
-            db.commit()
-        finally:db.close()
+            temporary.write_text(game["pgn"].rstrip()+"\n",encoding="utf-8")
+            temporary.replace(target)
+            db=self.connect()
+            try:
+                db.execute("""INSERT INTO chesscom_games(game_id,username,played_at,result,user_color,user_result,
+                    player_rating,opponent,opponent_rating,time_control,time_class,rated,rules,opening,pgn_path,
+                    reviewed,user_accuracy,chesscom_accuracy,predicted_elo,review_json,opponent_country,opponent_country_checked)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(game_id) DO UPDATE SET username=excluded.username,played_at=excluded.played_at,
+                    result=excluded.result,user_color=excluded.user_color,user_result=excluded.user_result,
+                    player_rating=excluded.player_rating,opponent=excluded.opponent,opponent_rating=excluded.opponent_rating,
+                    time_control=excluded.time_control,time_class=excluded.time_class,rated=excluded.rated,
+                    rules=excluded.rules,opening=excluded.opening,pgn_path=excluded.pgn_path,
+                    chesscom_accuracy=COALESCE(excluded.chesscom_accuracy,chesscom_games.chesscom_accuracy)""",record)
+                db.commit()
+            finally:db.close()
+        except Exception:
+            try:
+                if previous_pgn is None:
+                    target.unlink(missing_ok=True)
+                else:
+                    restore=target.with_suffix(".pgn.restore")
+                    restore.write_bytes(previous_pgn)
+                    restore.replace(target)
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
         return game_id
 
     def chesscom_games(self,username):
@@ -571,14 +585,15 @@ class ProfileStore:
 
     def remove_chesscom_game(self,game_id):
         db=self.connect()
-        try:row=db.execute("SELECT pgn_path FROM chesscom_games WHERE game_id=?",(game_id,)).fetchone()
+        try:
+            row=db.execute("SELECT pgn_path FROM chesscom_games WHERE game_id=?",(game_id,)).fetchone()
+            if row:
+                db.execute("DELETE FROM chesscom_games WHERE game_id=?",(game_id,))
+                db.commit()
         finally:db.close()
         if row:
             try:Path(row[0]).unlink(missing_ok=True)
             except OSError:pass
-            db=self.connect()
-            try:db.execute("DELETE FROM chesscom_games WHERE game_id=?",(game_id,));db.commit()
-            finally:db.close()
 
     def set_chesscom_review(self,game_id,reviewed,user_accuracy=None,predicted_elo=None,review_json="[]",stats_json="{}"):
         db=self.connect()

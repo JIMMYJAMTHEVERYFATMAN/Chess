@@ -1,5 +1,25 @@
 # Changelog
 
+## [v2.1.1.1] - 2026-11-06
+
+### Changed
+
+- Chess.com profile refreshes and PGN-derived opening insights run asynchronously so large local libraries keep the profile responsive.
+- Background PGN-stat scans show local progress without blocking the profile with a full-page loading overlay.
+
+### Fixed
+
+- Find archives no longer leaves a loading overlay active when the archive lookup starts loading the latest month before the first worker finishes.
+- Profile and Opening Trainer loading overlays are released after render failures and stale worker results.
+- Closing a profile prevents background workers from scheduling another refresh.
+- Chess.com game removal and saves preserve PGN/database consistency when database operations fail.
+- Cached PGN statistics and partial Chess.com game records handle malformed or missing data safely.
+
+### Verification
+
+- 176 unittest cases passed, including local dashboard HTTP checks.
+- A read-only profile timing probe confirmed PGN header enrichment completes after initial rendering.
+
 ## [v2.1.1.0] - 2026-11-05
 
 ### Added

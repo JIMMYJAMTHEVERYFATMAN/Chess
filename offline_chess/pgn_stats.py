@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import Counter
 import json
+import math
 import re
 
 import chess
@@ -121,17 +122,60 @@ def extract_pgn_stats(game, time_control=""):
     }
 
 
+def _valid_cached_summary(value):
+    """Reject malformed persisted summaries before they reach profile aggregation."""
+    def numeric(item):
+        if not isinstance(item, (int, float)):
+            return False
+        try:
+            return math.isfinite(float(item))
+        except OverflowError:
+            return False
+
+    for field in ("plies", "repeated_positions"):
+        if field in value and not numeric(value[field]):
+            return False
+    for field in ("queenless_ply",):
+        if field in value and value[field] is not None and not numeric(value[field]):
+            return False
+    for field in ("moves", "checks", "captures", "promotions", "clock_annotations",
+                  "elapsed_annotations", "elapsed_seconds"):
+        mapping = value.get(field, {})
+        if not isinstance(mapping, dict) or any(not numeric(item) for item in mapping.values()):
+            return False
+    for field in ("moves_by_piece", "captured_pieces", "promotion_pieces", "elapsed_sources"):
+        sides = value.get(field, {})
+        if not isinstance(sides, dict):
+            return False
+        for piece_counts in sides.values():
+            if not isinstance(piece_counts, dict) or any(not numeric(item) for item in piece_counts.values()):
+                return False
+    castling = value.get("castling_ply", {})
+    if not isinstance(castling, dict) or any(item is not None and not numeric(item)
+                                               for item in castling.values()):
+        return False
+    return isinstance(value.get("final_position", ""), str)
+
+
 def aggregate_pgn_stats(records):
     """Build display-ready measures with an explicit valid-PGN denominator."""
     paired = []
     errors = 0
     for record in records:
+        if not isinstance(record, dict):
+            errors += 1
+            continue
+        source = record.get("pgn_stats_json")
         try:
-            value = json.loads(record.get("pgn_stats_json") or "{}")
+            value = json.loads(source or "{}")
         except (TypeError, ValueError):
+            if source:
+                errors += 1
             value = {}
         if isinstance(value, dict) and value.get("source") == "pgn" and value.get("version") == PGN_STATS_VERSION:
             if value.get("error"):
+                errors += 1
+            elif not _valid_cached_summary(value):
                 errors += 1
             else:
                 paired.append((record, value))
@@ -141,7 +185,8 @@ def aggregate_pgn_stats(records):
     denominator = len(valid)
     if not denominator:
         return {"scanned": scanned, "total": total, "valid": 0, "errors": errors,
-                "pending": max(0, total - scanned), "rows": []}
+                "pending": max(0, total - scanned),
+                "rows": [("Unreadable PGNs", f"{errors:,}", f"of {total:,} attempted")] if errors else []}
 
     def mean(field):
         return sum(int(game.get(field) or 0) for game in valid) / denominator

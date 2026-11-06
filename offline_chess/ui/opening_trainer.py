@@ -49,6 +49,7 @@ class OpeningTrainerPage(QWidget):
         self._catalog_ready = False
         self._refresh_pending = False
         self._refresh_generation = 0
+        self._loading_generation = 0
         self._choice_population = None
         self._records_worker = None
         self._records_reload_pending = False
@@ -174,6 +175,7 @@ class OpeningTrainerPage(QWidget):
         self.refresh()
 
     def refresh(self, *_):
+        self._loading_generation = self._refresh_generation + 1
         self.begin_loading("Loading opening performance…")
         if not self._refresh_pending:
             self._refresh_pending = True
@@ -183,6 +185,7 @@ class OpeningTrainerPage(QWidget):
         self._refresh_pending = False
         self._refresh_generation += 1
         generation = self._refresh_generation
+        self._loading_generation = generation
         self.lines = self._for_side(self.side.currentData())
         if not self._catalog_ready:
             current = self.opening_choice.currentData()
@@ -241,11 +244,13 @@ class OpeningTrainerPage(QWidget):
             self._load_performance_records(self._refresh_generation)
 
     def _performance_records_loaded(self, generation, records):
-        if generation != self._refresh_generation:
-            return
-        self._fill_performance(records)
-        self._select_opening()
-        self.end_loading()
+        try:
+            if generation != self._refresh_generation:
+                return
+            self._fill_performance(records)
+            self._select_opening()
+        finally:
+            self.end_loading(generation)
 
     def _fill_performance(self, records):
         self.stats = defaultdict(lambda: {"games": 0, "w": 0, "d": 0, "l": 0})
@@ -351,7 +356,9 @@ class OpeningTrainerPage(QWidget):
         if self.loading_animation.state() != QPropertyAnimation.State.Running:
             self.loading_animation.start()
 
-    def end_loading(self):
+    def end_loading(self, generation=None):
+        if generation is not None and generation != self._loading_generation:
+            return
         self.loading_animation.stop()
         self.loading_overlay.hide()
 

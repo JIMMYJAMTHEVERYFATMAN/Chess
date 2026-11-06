@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
 import urllib.error
@@ -18,6 +19,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import chess
 import chess.pgn
 from PyQt6.QtCore import Qt
+from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QTableWidgetItem
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -36,7 +38,7 @@ from offline_chess.chesscom_data import (
 )
 from offline_chess.pgn_stats import PGN_STATS_VERSION, aggregate_pgn_stats, extract_pgn_stats
 from offline_chess.review_logic import castling_timing_label
-from offline_chess.ui.profile_dialog import ProfileDialog
+from offline_chess.ui.profile_dialog import ProfileDialog, _ChesscomPGNInsightsWorker
 
 
 class UpdateHardeningTests(unittest.TestCase):
@@ -592,6 +594,23 @@ class ChessComPgnStatsTests(unittest.TestCase):
         stale = dict(record, pgn_stats_json=json.dumps(dict(stats, version="0")))
         self.assertEqual(aggregate_pgn_stats([stale])["pending"], 1)
 
+    def test_aggregate_counts_malformed_cached_shapes_instead_of_raising(self):
+        malformed = [
+            {"user_color": "White", "pgn_stats_json": json.dumps({
+                "source": "pgn", "version": PGN_STATS_VERSION, "plies": "bad",
+            })},
+            {"user_color": "Black", "pgn_stats_json": json.dumps({
+                "source": "pgn", "version": PGN_STATS_VERSION,
+                "plies": 2, "checks": ["not", "a", "mapping"],
+            })},
+            {"user_color": "White", "pgn_stats_json": "{broken json"},
+        ]
+        result = aggregate_pgn_stats(malformed)
+        self.assertEqual(result["valid"], 0)
+        self.assertEqual(result["errors"], 3)
+        self.assertEqual(result["pending"], 0)
+        self.assertEqual(result["rows"], [("Unreadable PGNs", "3", "of 3 attempted")])
+
     def test_worker_reports_bad_files_and_store_migrates_and_caches_summaries(self):
         previous = os.environ.get("LOCALAPPDATA")
         try:
@@ -640,7 +659,220 @@ class ChessComPgnStatsTests(unittest.TestCase):
                 os.environ["LOCALAPPDATA"] = previous
 
 
+class ProfileStoreFailureTests(unittest.TestCase):
+    def test_chesscom_save_cleans_pgn_when_database_insert_fails(self):
+        previous = os.environ.get("LOCALAPPDATA")
+        try:
+            with tempfile.TemporaryDirectory(dir=os.getcwd()) as folder:
+                with patch.dict(os.environ, {"LOCALAPPDATA": folder, "XDG_DATA_HOME": folder}):
+                    store = ProfileStore()
+                    game = {
+                        "url": "https://www.chess.com/game/live/save-failure",
+                        "end_time": 1793450000,
+                        "pgn": '[Event "Online"]\n[White "player1"]\n[Black "opponent"]\n[Result "*"]\n\n1. e4 e5 *\n',
+                        "white": {"username": "player1"},
+                        "black": {"username": "opponent"},
+                    }
+                    with patch.object(store, "connect", side_effect=sqlite3.OperationalError("injected database failure")):
+                        with self.assertRaisesRegex(sqlite3.OperationalError, "injected database failure"):
+                            store.save_chesscom_game("player1", game)
+
+                    pgn_root = Path(folder) / "OfflineChess" / "chesscom_games"
+                    self.assertEqual(list(pgn_root.rglob("*.pgn")), [])
+                    self.assertEqual(list(pgn_root.rglob("*.tmp")), [])
+        finally:
+            if previous is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = previous
+
+    def test_chesscom_save_restores_existing_pgn_when_database_update_fails(self):
+        previous = os.environ.get("LOCALAPPDATA")
+        try:
+            with tempfile.TemporaryDirectory(dir=os.getcwd()) as folder:
+                with patch.dict(os.environ, {"LOCALAPPDATA": folder, "XDG_DATA_HOME": folder}):
+                    store = ProfileStore()
+                    game = {
+                        "url": "https://www.chess.com/game/live/save-update-failure",
+                        "end_time": 1793450000,
+                        "pgn": '[Event "Online"]\n[White "player1"]\n[Black "opponent"]\n[Result "*"]\n\n1. e4 e5 *\n',
+                        "white": {"username": "player1"},
+                        "black": {"username": "opponent"},
+                    }
+                    game_id = store.save_chesscom_game("player1", game)
+                    record = store.chesscom_games("player1")[0]
+                    pgn_path = Path(record["pgn_path"])
+                    original_pgn = pgn_path.read_bytes()
+                    replacement = dict(game, pgn='[Event "Online"]\n[White "player1"]\n[Black "opponent"]\n[Result "*"]\n\n1. d4 d5 *\n')
+
+                    with patch.object(store, "connect", side_effect=sqlite3.OperationalError("injected database failure")):
+                        with self.assertRaisesRegex(sqlite3.OperationalError, "injected database failure"):
+                            store.save_chesscom_game("player1", replacement)
+
+                    self.assertEqual(pgn_path.read_bytes(), original_pgn)
+                    self.assertEqual(store.chesscom_games("player1")[0]["game_id"], game_id)
+        finally:
+            if previous is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = previous
+
+    def test_chesscom_remove_keeps_pgn_when_database_delete_fails(self):
+        previous = os.environ.get("LOCALAPPDATA")
+        try:
+            with tempfile.TemporaryDirectory(dir=os.getcwd()) as folder:
+                with patch.dict(os.environ, {"LOCALAPPDATA": folder, "XDG_DATA_HOME": folder}):
+                    store = ProfileStore()
+                    game_id = store.save_chesscom_game("player1", {
+                        "url": "https://www.chess.com/game/live/remove-failure",
+                        "end_time": 1793450000,
+                        "pgn": '[Event "Online"]\n[White "player1"]\n[Black "opponent"]\n[Result "*"]\n\n1. e4 e5 *\n',
+                        "white": {"username": "player1"},
+                        "black": {"username": "opponent"},
+                    })
+                    pgn_path = Path(store.chesscom_games("player1")[0]["pgn_path"])
+                    original_connect = store.connect
+
+                    class FailingDeleteConnection:
+                        def __init__(self, connection):
+                            self.connection = connection
+
+                        def execute(self, sql, parameters=()):
+                            if sql.startswith("DELETE FROM chesscom_games"):
+                                raise sqlite3.OperationalError("injected database failure")
+                            return self.connection.execute(sql, parameters)
+
+                        def commit(self):
+                            return self.connection.commit()
+
+                        def close(self):
+                            return self.connection.close()
+
+                    with patch.object(store, "connect", side_effect=lambda: FailingDeleteConnection(original_connect())):
+                        with self.assertRaisesRegex(sqlite3.OperationalError, "injected database failure"):
+                            store.remove_chesscom_game(game_id)
+
+                    self.assertTrue(pgn_path.exists())
+                    self.assertEqual(len(store.chesscom_games("player1")), 1)
+        finally:
+            if previous is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = previous
+
+
 class ChessComProfileUiEdgeTests(unittest.TestCase):
+    def test_profile_snapshot_render_exception_releases_loading_overlay(self):
+        app = QApplication.instance() or QApplication([])
+        previous = os.environ.get("LOCALAPPDATA")
+        try:
+            with tempfile.TemporaryDirectory(dir=os.getcwd()) as folder:
+                with patch.dict(os.environ, {"LOCALAPPDATA": folder, "XDG_DATA_HOME": folder}):
+                    dialog = ProfileDialog(ProfileStore(), lambda _game: None)
+                    dialog._profile_refresh_generation = 7
+                    token = dialog.begin_profile_loading("Refreshing profile…")
+                    dialog._profile_refresh_loading_token = token
+                    with patch.object(dialog, "_apply_profile_snapshot", side_effect=RuntimeError("render failed")):
+                        with self.assertRaisesRegex(RuntimeError, "render failed"):
+                            dialog._profile_snapshot_loaded(7, [], 0)
+                    QTest.qWait(250)
+                    self.assertNotIn(token, dialog._profile_loading_tasks)
+                    dialog.close()
+                    dialog.deleteLater()
+                    app.processEvents()
+        finally:
+            if previous is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = previous
+
+    def test_profile_pgn_insights_worker_reads_headers_and_emits_results(self):
+        with tempfile.TemporaryDirectory(dir=os.getcwd()) as folder:
+            pgn_path = Path(folder) / "game.pgn"
+            pgn_path.write_text('[Event "Online"]\n[Termination "Normal"]\n[Result "1-0"]\n\n1. e4 e5 1-0\n', encoding="utf-8")
+            worker = _ChesscomPGNInsightsWorker(3, [("game", str(pgn_path), "White", None, True, False)], set())
+            emitted = []
+            worker.loaded.connect(lambda generation, headers, depths: emitted.append((generation, headers, depths)))
+            worker.run()
+            self.assertEqual(emitted, [(3, {str(pgn_path): "Normal"}, {})])
+
+    def test_chesscom_filter_refresh_uses_async_store_path(self):
+        app = QApplication.instance() or QApplication([])
+        previous = os.environ.get("LOCALAPPDATA")
+        try:
+            with tempfile.TemporaryDirectory(dir=os.getcwd()) as folder:
+                with patch.dict(os.environ, {"LOCALAPPDATA": folder, "XDG_DATA_HOME": folder}):
+                    dialog = ProfileDialog(ProfileStore(), lambda _game: None)
+                    with patch.object(dialog, "refresh_chesscom_library_async") as refresh_async, \
+                            patch.object(dialog, "refresh_chesscom_library") as refresh_sync:
+                        dialog._refresh_chesscom_from_filters()
+                        refresh_async.assert_called_once_with(dialog.chesscom_username.text())
+                        refresh_sync.assert_not_called()
+                    dialog.close()
+                    dialog.deleteLater()
+                    app.processEvents()
+        finally:
+            if previous is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = previous
+
+    def test_replaced_archive_worker_still_releases_its_loading_token(self):
+        app = QApplication.instance() or QApplication([])
+        previous = os.environ.get("LOCALAPPDATA")
+        try:
+            with tempfile.TemporaryDirectory(dir=os.getcwd()) as folder:
+                with patch.dict(os.environ, {"LOCALAPPDATA": folder, "XDG_DATA_HOME": folder}):
+                    dialog = ProfileDialog(ProfileStore(), lambda _game: None)
+                    old_worker = type("Worker", (), {})()
+                    current_worker = type("Worker", (), {})()
+                    old_token = dialog.begin_profile_loading("Loading archives…")
+                    current_token = dialog.begin_profile_loading("Loading games…")
+                    old_worker._profile_loading_token = old_token
+                    current_worker._profile_loading_token = current_token
+                    dialog._chesscom_worker = current_worker
+
+                    dialog._finish_chesscom_worker(old_worker)
+                    QTest.qWait(250)
+                    self.assertNotIn(old_token, dialog._profile_loading_tasks)
+                    self.assertIn(current_token, dialog._profile_loading_tasks)
+                    self.assertIs(dialog._chesscom_worker, current_worker)
+
+                    dialog._finish_chesscom_worker(current_worker)
+                    QTest.qWait(250)
+                    self.assertNotIn(current_token, dialog._profile_loading_tasks)
+                    self.assertIsNone(dialog._chesscom_worker)
+                    dialog.close()
+                    dialog.deleteLater()
+                    app.processEvents()
+        finally:
+            if previous is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = previous
+
+    def test_library_render_recovers_from_missing_cached_game_fields(self):
+        app = QApplication.instance() or QApplication([])
+        previous = os.environ.get("LOCALAPPDATA")
+        try:
+            with tempfile.TemporaryDirectory(dir=os.getcwd()) as folder:
+                with patch.dict(os.environ, {"LOCALAPPDATA": folder, "XDG_DATA_HOME": folder}):
+                    dialog = ProfileDialog(ProfileStore(), lambda _game: None)
+                    dialog._render_chesscom_library([{"opponent": "partial"}])
+                    self.assertTrue(dialog.chesscom_library.updatesEnabled())
+                    self.assertEqual(dialog.chesscom_library.rowCount(), 1)
+                    self.assertEqual(dialog.chesscom_library.item(0, 0).text(), "Unknown date")
+                    self.assertEqual(dialog.chesscom_library.item(0, 1).text(), "partial")
+                    self.assertEqual(dialog.chesscom_library.item(0, 8).text(), "No PGN")
+                    dialog.close()
+                    dialog.deleteLater()
+                    app.processEvents()
+        finally:
+            if previous is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = previous
+
     def test_castling_row_filters_games_and_clicking_again_clears_filter(self):
         app = QApplication.instance() or QApplication([])
         previous = os.environ.get("LOCALAPPDATA")

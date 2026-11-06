@@ -19,6 +19,7 @@ try:
     from PyQt6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, Qt, pyqtSignal
     from PyQt6.QtGui import QImage, QKeyEvent, QMouseEvent, QPainter
     from PyQt6.QtWidgets import QTabWidget, QWidget
+    from PyQt6.QtTest import QTest
     from main import (
         analyze_review_events,
         removed_defender_event,
@@ -1055,6 +1056,13 @@ class ReviewAnalysisTests(unittest.TestCase):
                 store=ProfileStore()
                 opened=[]
                 dialog=ProfileDialog(store,opened.append)
+                def wait_for_profile_refresh():
+                    deadline=time.monotonic()+5
+                    while time.monotonic()<deadline:
+                        app.processEvents()
+                        if dialog._chesscom_games_worker is None and dialog._chesscom_games_pending is None:return
+                        QTest.qWait(10)
+                    self.fail("Chess.com profile refresh did not finish")
                 self.assertTrue(hasattr(dialog,"chesscom_pgn_quick_values"))
                 self.assertEqual(len(dialog.chesscom_pgn_quick_values),12)
                 self.assertNotIn("eval",dialog.chesscom_pgn_quick_values)
@@ -1093,6 +1101,7 @@ class ReviewAnalysisTests(unittest.TestCase):
                 self.assertEqual(dialog.chesscom_available.rowCount(),1)
                 dialog.chesscom_available.selectRow(0)
                 dialog.download_selected_chesscom()
+                wait_for_profile_refresh()
                 self.assertEqual(dialog.chesscom_library.rowCount(),1)
                 self.assertEqual(dialog.chesscom_library.item(0,5).text(),"Bird Opening · A02")
                 self.assertEqual(dialog.chesscom_openings.item(0,0).text(),"Bird Opening · A02")
@@ -1105,10 +1114,12 @@ class ReviewAnalysisTests(unittest.TestCase):
                 dialog.refresh_chesscom_library("player1")
                 self.assertEqual(dialog.chesscom_library.rowCount(),2)
                 dialog.chesscom_speed_filter.setCurrentText("Blitz")
+                wait_for_profile_refresh()
                 self.assertEqual(dialog.chesscom_library.rowCount(),1)
                 self.assertEqual(dialog.chesscom_openings.item(0,0).text(),"King's Pawn Game · C20")
                 self.assertIn("Showing 1 of 2 downloaded games",dialog.chesscom_trends.text())
                 dialog.chesscom_speed_filter.setCurrentText("Rapid")
+                wait_for_profile_refresh()
                 self.assertEqual(dialog.chesscom_library.rowCount(),1)
                 self.assertEqual(dialog.chesscom_openings.item(0,0).text(),"Bird Opening · A02")
                 dialog.chesscom_library.selectRow(0)
@@ -1276,6 +1287,12 @@ class ReviewAnalysisTests(unittest.TestCase):
                 dialog=ProfileDialog(store,lambda _game:None)
                 dialog.chesscom_username.setText("player1")
                 dialog.chesscom_date_filter.setCurrentText("Last 7 days")
+                deadline=time.monotonic()+5
+                while time.monotonic()<deadline:
+                    app.processEvents()
+                    if dialog._chesscom_games_worker is None:break
+                    QTest.qWait(10)
+                else:self.fail("Chess.com filter refresh did not finish")
                 comparison=dialog.chesscom_period_comparison.text()
                 self.assertIn("score unavailable",comparison)
                 self.assertIn("local review accuracy unavailable",comparison)
