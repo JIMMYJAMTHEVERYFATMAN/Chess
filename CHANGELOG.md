@@ -1,5 +1,22 @@
 # Changelog
 
+## [v2.1.1.2] - 2026-11-07
+
+### Added
+
+- Chess.com profiles can switch between saved usernames from the profile entry field.
+- Quick PGN data areas summarize time management, opening development, trade patterns, draw and repetition results, and simplified endgames without Stockfish.
+
+### Changed
+
+- Quick castling scans now classify games by the user's castling, not the opponent's; old scans are refreshed.
+- Batch Chess.com reviews can run deeper confirmation for likely Brilliant sacrifices while retaining quick per-move analysis.
+
+### Fixed
+
+- Windows release builds explicitly bundle the Python build's Microsoft Visual C++ runtime DLLs to reduce missing-dependency failures while loading `python312.dll`.
+- The updater rolls back to the previous executable when the updated app exits or displays a startup error dialog.
+
 ## [v2.1.1.1] - 2026-11-06
 
 ### Changed

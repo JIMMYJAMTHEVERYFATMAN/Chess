@@ -367,6 +367,63 @@ class ProfileDialog(QWidget):
         self.end_profile_loading(getattr(self,"_chesscom_initial_loading_token",None))
         self._chesscom_initial_loading_token=None
 
+    def _saved_chesscom_profiles(self):
+        values=[]
+        try:stored=json.loads(self.store.get_setting("chesscom_saved_profiles","[]") or "[]")
+        except (TypeError,ValueError):stored=[]
+        candidates=[self.store.get_setting("chesscom_username",""),*(stored if isinstance(stored,list) else [])]
+        try:candidates.extend(self.store.chesscom_usernames())
+        except (OSError,sqlite3.Error):pass
+        seen=set()
+        for candidate in candidates:
+            if not isinstance(candidate,str):continue
+            try:username=normalize_chesscom_username(candidate)
+            except (TypeError,ValueError):continue
+            key=username.casefold()
+            if key not in seen:
+                seen.add(key);values.append(username)
+        return values
+
+    def _refresh_chesscom_profile_picker(self,selected=None):
+        picker=getattr(self,"chesscom_profile_picker",None)
+        if picker is None:return
+        selected=str(selected or self.chesscom_username.text()).strip().casefold()
+        picker.blockSignals(True);picker.clear();picker.addItem("Saved profiles…",None)
+        for username in self._saved_chesscom_profiles():picker.addItem(username,username)
+        match=next((index for index in range(1,picker.count())
+                    if str(picker.itemData(index)).casefold()==selected),0)
+        picker.setCurrentIndex(match);picker.blockSignals(False)
+
+    def _remember_chesscom_profile(self,username):
+        username=normalize_chesscom_username(username)
+        profiles=[username]+[item for item in self._saved_chesscom_profiles()
+                             if item.casefold()!=username.casefold()]
+        self.store.set_setting("chesscom_username",username)
+        self.store.set_setting("chesscom_saved_profiles",json.dumps(profiles[:20]))
+        self._refresh_chesscom_profile_picker(username)
+        return username
+
+    def _chesscom_username_edited(self):
+        username=self.chesscom_username.text().strip()
+        if username:
+            try:
+                username=self._remember_chesscom_profile(username)
+                self.chesscom_username.setText(username)
+            except ValueError:
+                pass
+        self.refresh_chesscom_library_async(username)
+
+    def _select_chesscom_profile(self,index):
+        username=self.chesscom_profile_picker.itemData(index)
+        if not username:return
+        self.chesscom_username.setText(str(username))
+        self.store.set_setting("chesscom_username",str(username))
+        self._chesscom_archives=[];self._chesscom_available_games=[]
+        self.chesscom_month.blockSignals(True);self.chesscom_month.clear();self.chesscom_month.blockSignals(False)
+        self.chesscom_available.setRowCount(0)
+        self.chesscom_status.setText(f"Selected saved profile {username}. Choose Find archives to fetch its public archives.")
+        self.refresh_chesscom_library_async(str(username))
+
     def _build_chesscom_page(self):
         scroll=QScrollArea();scroll.setWidgetResizable(True);scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setMinimumSize(0,0);scroll.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Expanding)
@@ -376,8 +433,13 @@ class ProfileDialog(QWidget):
         note.setObjectName("Muted");note.setWordWrap(True);layout.addWidget(note)
         account_row=QHBoxLayout();self.chesscom_username=QLineEdit(self.store.get_setting("chesscom_username",""))
         self.chesscom_username.setPlaceholderText("Chess.com username");self.chesscom_username.setClearButtonEnabled(True)
-        self.chesscom_username.editingFinished.connect(lambda:self.refresh_chesscom_library_async(self.chesscom_username.text()))
-        account_row.addWidget(self.chesscom_username,1);self.chesscom_connect=QPushButton("Find archives");self.chesscom_connect.clicked.connect(self.find_chesscom_archives);account_row.addWidget(self.chesscom_connect)
+        self.chesscom_username.editingFinished.connect(self._chesscom_username_edited)
+        account_row.addWidget(self.chesscom_username,1)
+        self.chesscom_profile_picker=QComboBox();self.chesscom_profile_picker.setMinimumWidth(150)
+        self.chesscom_profile_picker.setToolTip("Choose a previously used Chess.com profile. Usernames are saved locally.")
+        self.chesscom_profile_picker.currentIndexChanged.connect(self._select_chesscom_profile)
+        account_row.addWidget(self.chesscom_profile_picker);self._refresh_chesscom_profile_picker()
+        self.chesscom_connect=QPushButton("Find archives");self.chesscom_connect.clicked.connect(self.find_chesscom_archives);account_row.addWidget(self.chesscom_connect)
         account_row.addWidget(QLabel("Month"));self.chesscom_month=QComboBox();self.chesscom_month.setMinimumWidth(140);self.chesscom_month.currentIndexChanged.connect(self.load_chesscom_month);account_row.addWidget(self.chesscom_month)
         self.chesscom_download_all=QPushButton("Download all months");self.chesscom_download_all.clicked.connect(self.download_all_chesscom);account_row.addWidget(self.chesscom_download_all)
         self.chesscom_update_downloads=QPushButton("Update downloaded games");self.chesscom_update_downloads.setEnabled(False);self.chesscom_update_downloads.setToolTip("Check archive months from your latest saved game and download only games not already stored.");self.chesscom_update_downloads.clicked.connect(self.update_downloaded_chesscom);account_row.addWidget(self.chesscom_update_downloads)
@@ -430,6 +492,19 @@ class ProfileDialog(QWidget):
         self.chesscom_pgn_stats=QTableWidget(0,3);self.chesscom_pgn_stats.setHorizontalHeaderLabels(["Measure","Result","Coverage / source"])
         self._configure_chesscom_table(self.chesscom_pgn_stats);self.chesscom_pgn_stats.setMaximumHeight(300)
         self.chesscom_pgn_stats.setVisible(False);layout.addWidget(self.chesscom_pgn_stats)
+        pgn_areas_title=QLabel("MORE PGN DATA AREAS · NO ENGINE REVIEW");pgn_areas_title.setObjectName("SectionTitle");layout.addWidget(pgn_areas_title)
+        pgn_areas_note=QLabel("Patterns are counted from the saved mainlines and clock tags. Some rows show less data when PGNs omit clocks, results, or enough moves.")
+        pgn_areas_note.setObjectName("Muted");pgn_areas_note.setWordWrap(True);layout.addWidget(pgn_areas_note)
+        self.chesscom_pgn_area_tables={}
+        self.chesscom_pgn_area_grid=ResponsiveTableGrid();self.chesscom_pgn_area_grid.setObjectName("ChessComPgnDataAreas")
+        for key,title in (("time","TIME MANAGEMENT"),("development","OPENING DEVELOPMENT"),
+                          ("trades","TRADE PATTERNS"),("draws","DRAW AND REPETITION"),
+                          ("endgames","SIMPLIFIED ENDGAMES")):
+            table=QTableWidget(0,3);table.setHorizontalHeaderLabels(["Measure","Result","Coverage"])
+            self._configure_chesscom_table(table);table.setMaximumHeight(220)
+            self.chesscom_pgn_area_tables[key]=table
+            self.chesscom_pgn_area_grid.add_table(title,table)
+        layout.addWidget(self.chesscom_pgn_area_grid)
         past_title=QLabel("PAST PERFORMANCE");past_title.setObjectName("SectionTitle");layout.addWidget(past_title)
         self.chesscom_period_comparison=QLabel("Choose a recent insights period to compare it with the preceding period.");self.chesscom_period_comparison.setObjectName("ReviewSummary");self.chesscom_period_comparison.setWordWrap(True);layout.addWidget(self.chesscom_period_comparison)
         self.chesscom_trends=QLabel("Download games to build your rating, results, and opening trends.");self.chesscom_trends.setObjectName("ReviewSummary");self.chesscom_trends.setWordWrap(True);layout.addWidget(self.chesscom_trends)
@@ -577,8 +652,9 @@ class ProfileDialog(QWidget):
                                known_game_ids=None,minimum_archive_month=""):
         try:username=normalize_chesscom_username(self.chesscom_username.text())
         except ValueError as exc:self.chesscom_status.setText(str(exc));return
-        self.store.set_setting("chesscom_username",username)
-        self.chesscom_username.setEnabled(False);self.chesscom_connect.setEnabled(False);self.chesscom_download_all.setEnabled(False)
+        username=self._remember_chesscom_profile(username)
+        self.chesscom_username.setEnabled(False);self.chesscom_profile_picker.setEnabled(False)
+        self.chesscom_connect.setEnabled(False);self.chesscom_download_all.setEnabled(False)
         self.chesscom_update_downloads.setEnabled(False)
         self.chesscom_month.setEnabled(False);self.chesscom_available.setEnabled(False)
         self.chesscom_download_selected.setEnabled(False);self.chesscom_download_month.setEnabled(False)
@@ -716,7 +792,8 @@ class ProfileDialog(QWidget):
     def _finish_chesscom_worker(self,worker):
         loading_token=getattr(worker,"_profile_loading_token",None)
         if worker is self._chesscom_worker:
-            self._chesscom_worker=None;self.chesscom_username.setEnabled(True);self.chesscom_connect.setEnabled(True);self.chesscom_download_all.setEnabled(True)
+            self._chesscom_worker=None;self.chesscom_username.setEnabled(True);self.chesscom_profile_picker.setEnabled(True)
+            self.chesscom_connect.setEnabled(True);self.chesscom_download_all.setEnabled(True)
             self.chesscom_update_downloads.setEnabled(bool(self._chesscom_known_game_ids))
             self.chesscom_month.setEnabled(True);self.chesscom_available.setEnabled(True)
             self.chesscom_download_selected.setEnabled(True);self.chesscom_download_month.setEnabled(True);self.chesscom_country_lookup.setEnabled(True)
@@ -795,7 +872,8 @@ class ProfileDialog(QWidget):
             for game in self._chesscom_all_games:
                 game_id=game.get("game_id")
                 if not game_id:continue
-                if game.get("castling_scanned"):
+                if (game.get("castling_scanned")
+                        and game.get("castling_scan_version",CASTLING_SCAN_VERSION)==CASTLING_SCAN_VERSION):
                     phases[game_id]=castling_timing_label(game.get("castling_phase"),game.get("castling_ply"))
                     continue
                 if not game.get("reviewed"):continue
@@ -804,6 +882,7 @@ class ProfileDialog(QWidget):
                 moves=payload.get("moves",[]) if isinstance(payload,dict) else []
                 if not isinstance(moves,list):continue
                 castle=next((move for move in moves if isinstance(move,dict)
+                             and (not game.get("user_color") or move.get("side")==game.get("user_color"))
                              and str(move.get("san"," ")).startswith(("O-O","0-0"))),None)
                 if castle is None:phases[game_id]="Did not castle"
                 else:phases[game_id]=castling_timing_label(castle.get("phase"),castle.get("ply"))
@@ -938,6 +1017,16 @@ class ProfileDialog(QWidget):
 
     def _refresh_chesscom_pgn_stats(self,games):
         summary=aggregate_pgn_stats(games);self.chesscom_pgn_stats.setRowCount(0)
+        for key,table in self.chesscom_pgn_area_tables.items():
+            table.setRowCount(0)
+            area_rows=summary.get("sections",{}).get(key,[])
+            if not area_rows and summary.get("total"):
+                area_rows=[("PGN data pending","—",f"{summary.get('pending',0):,} pending · {summary.get('errors',0):,} unreadable")]
+            elif not area_rows:
+                area_rows=[("No downloaded PGNs","—","Download games to calculate")]
+            for values in area_rows:
+                row=table.rowCount();table.insertRow(row)
+                for column,text in enumerate(values):table.setItem(row,column,QTableWidgetItem(str(text)))
         figures={}
         for measure,value,coverage in summary["rows"]:
             figures[measure]=(value,coverage)
@@ -1057,7 +1146,9 @@ class ProfileDialog(QWidget):
                      if game.get("pgn_stats_version")!=PGN_STATS_VERSION]
             if pending:self._start_chesscom_pgn_stats_scan(pending)
         self._chesscom_castling_scan_records=[game for game in selected_games
-            if not game.get("castling_scanned") and game.get("rules") in ("chess","")
+            if (not game.get("castling_scanned")
+                or game.get("castling_scan_version",CASTLING_SCAN_VERSION)!=CASTLING_SCAN_VERSION)
+            and game.get("rules") in ("chess","")
             and game.get("pgn_path") and Path(game["pgn_path"]).is_file()]
         scan_running=bool(self._castling_scan_worker and self._castling_scan_worker.isRunning())
         self.chesscom_castling_scan.setEnabled(bool(self._chesscom_castling_scan_records) and not scan_running)
@@ -1066,7 +1157,8 @@ class ProfileDialog(QWidget):
         elif self._chesscom_castling_scan_records:
             self.chesscom_castling_scan_status.setText(
                 f"{len(self._chesscom_castling_scan_records):,} games ready · no engine review needed")
-        elif any(game.get("castling_scanned") for game in selected_games):
+        elif any(game.get("castling_scanned")
+                 and game.get("castling_scan_version",CASTLING_SCAN_VERSION)==CASTLING_SCAN_VERSION for game in selected_games):
             self.chesscom_castling_scan_status.setText("Quick scan is up to date for these games.")
         else:
             self.chesscom_castling_scan_status.setText("Download standard-chess PGNs to scan castling timing.")
@@ -1491,7 +1583,8 @@ class ProfileDialog(QWidget):
                         for name in castle_labels}
         for game in selected_games:
             game_id=game.get("game_id")
-            if game.get("castling_scanned"):
+            if (game.get("castling_scanned")
+                    and game.get("castling_scan_version",CASTLING_SCAN_VERSION)==CASTLING_SCAN_VERSION):
                 phase=castling_timing_label(game.get("castling_phase"),game.get("castling_ply"))
             elif game_id in current_reviews_by_id:
                 moves=current_reviews_by_id[game_id]

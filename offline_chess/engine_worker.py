@@ -500,8 +500,8 @@ class EngineWorker(QObject):
                 # search only on possible brilliancies. Confirm the actual
                 # post-sacrifice position as well as the root alternatives.
                 justified=is_engine_justified_sacrifice(before,move,best,best_pv_moves,before_mover_ep,actual_mover_ep,best_mate)
-                brilliant_gap=0.0
-                if (justified and budget>=.4 and not book_entry and legal_count>1
+                brilliant_gap=0.0;brilliant_confirmed=False
+                if (justified and budget>0 and not book_entry and legal_count>1
                         and "MultiPV" in self.option_names and self._multipv_max>=2):
                     confirmation_limit=chess.engine.Limit(time=max(2.0,budget))
                     try:
@@ -512,7 +512,7 @@ class EngineWorker(QObject):
                     except Exception:
                         # A failed confirmation must never create a Brilliant
                         # label or abort an otherwise usable game review.
-                        justified=False;brilliant_gap=0.0
+                        justified=False;brilliant_gap=0.0;brilliant_confirmed=False
                     else:
                         deep_best_line=next((line for line in brilliant_lines
                                              if line.get("pv") and line["pv"][0] in before.legal_moves),None)
@@ -533,9 +533,11 @@ class EngineWorker(QObject):
                                 brilliant_gap=brilliant_choice_gap(
                                     before,brilliant_lines,before.turn,move,
                                     minimum_gap=BRILLIANT_MIN_UNIQUENESS_GAP)
+                                brilliant_confirmed=(brilliant_gap>=BRILLIANT_MIN_UNIQUENESS_GAP)
                         else:justified=False
                 if can_label_brilliant(justified,budget,bool(book_entry),legal_count,
-                                       brilliant_gap>=BRILLIANT_MIN_UNIQUENESS_GAP):
+                                       brilliant_gap>=BRILLIANT_MIN_UNIQUENESS_GAP,
+                                       deep_confirmed=brilliant_confirmed):
                     verdict,color="Brilliant","#b68ae0"
                     # Keep every surface of a Brilliant review on the same
                     # deeper search that earned the label. Otherwise the badge

@@ -19,7 +19,7 @@ BRILLIANT_MIN_POSTMOVE_EXPECTED_POINTS = .55
 BRILLIANT_MAX_EXPECTED_POINTS_LOSS = .02
 BRILLIANT_MIN_REPORTED_GAP = .04
 BRILLIANT_MIN_UNIQUENESS_GAP = .05
-REVIEW_ANALYSIS_VERSION = 13
+REVIEW_ANALYSIS_VERSION = 14
 ACCURACY_CALIBRATION_EXPONENT = 5.0
 ACCURACY_MODEL_VERSION = "caps2-inspired-v1"
 GREAT_ONLY_MAX_PREMOVE_EXPECTED_POINTS = .75
@@ -918,8 +918,11 @@ def brilliant_choice_gap(board: chess.Board, lines: list[dict], mover: chess.Col
 
 
 def can_label_brilliant(justified: bool, budget: float, book_move: bool, legal_count: int,
-                        unique_best: bool = False) -> bool:
-    return bool(justified and unique_best and budget>=.4 and not book_move and legal_count>1)
+                        unique_best: bool = False, deep_confirmed: bool = False) -> bool:
+    # A positive per-move budget only enables ordinary analysis. Brilliant is
+    # gated by the dedicated deep confirmation, whose search has its own floor.
+    return bool(justified and unique_best and deep_confirmed and budget>0
+                and not book_move and legal_count>1)
 
 
 def only_good_move_gap(board: chess.Board, lines: list[dict], mover: chess.Color,

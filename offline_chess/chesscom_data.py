@@ -39,6 +39,7 @@ PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 
 CHESSCOM_API_ROOT="https://api.chess.com/pub"
 CHESSCOM_ECO_PATTERN=re.compile(r"^[A-E]\d{2}$",re.IGNORECASE)
+CASTLING_SCAN_VERSION=2
 
 
 def _opening_name_key(value):
@@ -300,9 +301,12 @@ class ChessComCastlingScanWorker(QThread):
                     game=chess.pgn.read_game(source)
                 if game is None:raise ValueError("PGN contains no game")
                 if game.errors:raise ValueError(f"PGN contains invalid moves: {game.errors[0]}")
+                user_color=str(record.get("user_color") or "").strip().casefold()
+                if user_color not in ("white","black"):user_color=None
                 board=game.board()
                 for ply,move in enumerate(game.mainline_moves(),1):
-                    if board.is_castling(move):
+                    mover="white" if board.turn==chess.WHITE else "black"
+                    if (user_color is None or mover==user_color) and board.is_castling(move):
                         phase=game_phase(board);castle_ply=ply;break
                     board.push(move)
             except (OSError,UnicodeError,ValueError,chess.InvalidMoveError,chess.IllegalMoveError) as exc:
@@ -372,6 +376,7 @@ class ProfileStore:
                 review_json TEXT NOT NULL DEFAULT '[]', stats_json TEXT NOT NULL DEFAULT '{}',
                 opponent_country TEXT NOT NULL DEFAULT '', opponent_country_checked INTEGER NOT NULL DEFAULT 0,
                 castling_scanned INTEGER NOT NULL DEFAULT 0, castling_phase TEXT NOT NULL DEFAULT '', castling_ply INTEGER,
+                castling_scan_version INTEGER NOT NULL DEFAULT 0,
                 pgn_stats_version TEXT NOT NULL DEFAULT '', pgn_stats_json TEXT NOT NULL DEFAULT '{}')""")
             imported_columns={row[1] for row in db.execute("PRAGMA table_info(chesscom_games)")}
             if "stats_json" not in imported_columns:
@@ -388,6 +393,8 @@ class ProfileStore:
                 db.execute("ALTER TABLE chesscom_games ADD COLUMN castling_phase TEXT NOT NULL DEFAULT ''")
             if "castling_ply" not in imported_columns:
                 db.execute("ALTER TABLE chesscom_games ADD COLUMN castling_ply INTEGER")
+            if "castling_scan_version" not in imported_columns:
+                db.execute("ALTER TABLE chesscom_games ADD COLUMN castling_scan_version INTEGER NOT NULL DEFAULT 0")
             if "pgn_stats_version" not in imported_columns:
                 db.execute("ALTER TABLE chesscom_games ADD COLUMN pgn_stats_version TEXT NOT NULL DEFAULT ''")
             if "pgn_stats_json" not in imported_columns:
@@ -560,18 +567,27 @@ class ProfileStore:
             rows=db.execute("""SELECT game_id,username,played_at,result,user_color,user_result,player_rating,opponent,
                 opponent_rating,time_control,time_class,rated,rules,opening,pgn_path,reviewed,user_accuracy,
                 predicted_elo,review_json,stats_json,opponent_country,opponent_country_checked,chesscom_accuracy,
-                castling_scanned,castling_phase,castling_ply,pgn_stats_version,pgn_stats_json
+                castling_scanned,castling_phase,castling_ply,castling_scan_version,pgn_stats_version,pgn_stats_json
                 FROM chesscom_games WHERE username=? COLLATE NOCASE ORDER BY played_at DESC,game_id""",
                 (username,)).fetchall()
         finally:db.close()
         columns=("game_id","username","played_at","result","user_color","user_result","player_rating","opponent",
                  "opponent_rating","time_control","time_class","rated","rules","opening","pgn_path","reviewed",
                  "user_accuracy","predicted_elo","review_json","stats_json","opponent_country","opponent_country_checked",
-                 "chesscom_accuracy","castling_scanned","castling_phase","castling_ply","pgn_stats_version","pgn_stats_json")
+                 "chesscom_accuracy","castling_scanned","castling_phase","castling_ply","castling_scan_version",
+                 "pgn_stats_version","pgn_stats_json")
         records=[dict(zip(columns,row)) for row in rows]
         for record in records:
             record["opening"]=chesscom_opening_label(record.get("opening",""))
         return records
+
+    def chesscom_usernames(self):
+        """Return usernames that already have downloaded games in this profile."""
+        db=self.connect()
+        try:
+            rows=db.execute("SELECT DISTINCT username FROM chesscom_games ORDER BY username COLLATE NOCASE").fetchall()
+        finally:db.close()
+        return [str(row[0]) for row in rows if row and row[0]]
 
     def set_chesscom_opponent_country(self,username,opponent,country):
         username=normalize_chesscom_username(username);opponent=normalize_chesscom_username(opponent)
@@ -607,11 +623,11 @@ class ProfileStore:
         for game_id,phase,ply in scans:
             if phase not in ("Opening","Middlegame","Endgame","Did not castle"):
                 raise ValueError("Invalid castling phase")
-            rows.append((phase,ply,game_id))
+            rows.append((phase,ply,CASTLING_SCAN_VERSION,game_id))
         if not rows:return
         db=self.connect()
         try:
-            db.executemany("UPDATE chesscom_games SET castling_scanned=1,castling_phase=?,castling_ply=? WHERE game_id=?",rows);db.commit()
+            db.executemany("UPDATE chesscom_games SET castling_scanned=1,castling_phase=?,castling_ply=?,castling_scan_version=? WHERE game_id=?",rows);db.commit()
         finally:db.close()
 
     def set_chesscom_pgn_stats(self,results):

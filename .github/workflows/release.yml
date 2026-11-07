@@ -109,11 +109,23 @@ jobs:
       - name: Build single-file application
         shell: pwsh
         run: |
-          & $env:OFFLINE_CHESS_BUILD_PYTHON -m PyInstaller --noconfirm --clean --onefile --windowed `
-            --name OfflineChess `
-            --add-binary "stockfish.exe;." `
-            --add-data "openings;openings" `
-            main.py
+          $pythonRuntime = (& $env:OFFLINE_CHESS_BUILD_PYTHON -c "import sys; print(sys.base_prefix)").Trim()
+          $runtimeNames = @('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll', 'concrt140.dll')
+          $runtimeBinaries = @()
+          foreach ($runtimeName in $runtimeNames) {
+            $runtimePath = Join-Path $pythonRuntime $runtimeName
+            if (Test-Path -LiteralPath $runtimePath -PathType Leaf) {
+              $runtimeBinaries += @('--add-binary', "$runtimePath;.")
+            }
+          }
+          $vcruntime = Join-Path $pythonRuntime 'vcruntime140.dll'
+          if (-not (Test-Path -LiteralPath $vcruntime -PathType Leaf)) {
+            throw "Python's vcruntime140.dll was not found under $pythonRuntime"
+          }
+          $pyinstallerArgs = @('-m', 'PyInstaller', '--noconfirm', '--clean', '--onefile', '--windowed',
+            '--name', 'OfflineChess', '--add-binary', 'stockfish.exe;.', '--add-data', 'openings;openings') + $runtimeBinaries + @('main.py')
+          & $env:OFFLINE_CHESS_BUILD_PYTHON @pyinstallerArgs
+          if ($LASTEXITCODE -ne 0) { throw "PyInstaller exited with code $LASTEXITCODE" }
 
       - name: Create SHA-256 file
         shell: pwsh
