@@ -1812,7 +1812,7 @@ class ReviewAnalysisTests(unittest.TestCase):
         self.assertFalse(is_engine_justified_sacrifice(board,move,move,(move,),.70,.70,False))
 
     def test_brilliant_label_requires_thorough_nonbook_unforced_confirmation(self):
-        self.assertTrue(can_label_brilliant(True,.55,False,20,True))
+        self.assertTrue(can_label_brilliant(True,.55,False,20,True,deep_confirmed=True))
         rejected=(
             (False,.55,False,20),
             (True,.39,False,20),
@@ -1830,7 +1830,7 @@ class ReviewAnalysisTests(unittest.TestCase):
                {"pv":[alternative],"score":chess.engine.PovScore(chess.engine.Cp(0),chess.WHITE)}]
         gap=brilliant_choice_gap(board,lines,chess.WHITE,played)
         self.assertGreaterEqual(gap,.04)
-        self.assertTrue(can_label_brilliant(True,.55,False,20,gap>=.04))
+        self.assertTrue(can_label_brilliant(True,.55,False,20,gap>=.04,deep_confirmed=True))
         tied=[lines[0],{"pv":[alternative],"score":chess.engine.PovScore(chess.engine.Cp(145),chess.WHITE)}]
         tied_gap=brilliant_choice_gap(board,tied,chess.WHITE,played)
         self.assertLess(tied_gap,.04)

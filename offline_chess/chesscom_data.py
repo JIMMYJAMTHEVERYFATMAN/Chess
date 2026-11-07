@@ -820,6 +820,7 @@ __all__ = [
     'PACKAGE_ROOT',
     'CHESSCOM_API_ROOT',
     'CHESSCOM_ECO_PATTERN',
+    'CASTLING_SCAN_VERSION',
     'chesscom_opening_catalog',
     'chesscom_opening_label',
     'normalize_chesscom_username',

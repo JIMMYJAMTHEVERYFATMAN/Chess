@@ -227,14 +227,17 @@ def _valid_cached_summary(value):
         mapping = value.get(field, {})
         if not isinstance(mapping, dict) or any(not numeric(item) for item in mapping.values()):
             return False
-    for field in ("moves_by_piece", "captured_pieces", "promotion_pieces", "elapsed_sources",
-                  "low_clock_moves","immediate_recaptures"):
+    for field in ("moves_by_piece", "captured_pieces", "promotion_pieces", "elapsed_sources"):
         sides = value.get(field, {})
         if not isinstance(sides, dict):
             return False
         for piece_counts in sides.values():
             if not isinstance(piece_counts, dict) or any(not numeric(item) for item in piece_counts.values()):
                 return False
+    for field in ("low_clock_moves", "immediate_recaptures"):
+        side_counts = value.get(field, {})
+        if not isinstance(side_counts, dict) or any(not numeric(item) for item in side_counts.values()):
+            return False
     castling = value.get("castling_ply", {})
     if not isinstance(castling, dict) or any(item is not None and not numeric(item)
                                                for item in castling.values()):
