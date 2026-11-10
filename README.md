@@ -4,12 +4,33 @@ A local chess analysis app built with PyQt6, `python-chess`, and Stockfish. Game
 
 The **Position Lab** tab accepts a FEN and shows Stockfish's top three candidate moves for the selected side to move, with evaluations and principal variations, within the selected time limit.
 
-The **Opening Trainer** tab teaches White and Black repertoire lines from the bundled Lichess opening catalog. Choose an opening and one of its lines to drill your moves while learning the opponent's replies. Saved Chess.com games show your opening results and let you jump into your most-played or lowest-win-rate openings.
+The **Opening Trainer** tab teaches White and Black repertoire lines from the bundled Lichess opening catalog. Choose an opening and one of its lines to play your moves on the board while learning the opponent's replies. Saved Chess.com games show your opening results and let you jump into your most-played or lowest-win-rate openings.
 
 The **Endgame Trainer** lets you build an endgame with the board editor or generate a random queen, rook, or pawn ending, then play for checkmate against Stockfish with a selectable Elo.
 From Game Review, choose **Practice this game’s endgame** to continue from a position found in the reviewed game.
 
 The **Puzzles** tab offers engine focused tactics, total random puzzles, training based on downloaded Chess.com games and review weaknesses, forced mate challenges, and an escalating challenge run. Each puzzle has three lives. The challenge high score is saved in the local profile and shown in Profile.
+
+## New in v3: daily training and practice opponents
+
+Open **Train today**, then choose **Train today · up to 5 positions**. Running a game review adds your flagged mistakes to the local training queue. Opening Trainer adds positions as you drill repertoire moves directly on its board. Existing reviews can be reviewed again to seed the queue. Correct answers are scheduled for tomorrow, then at increasing intervals up to 60 days; misses and revealed answers return in ten minutes. Progress by topic appears above the training board. Select a promotion piece when needed.
+
+Training stores FEN positions, accepted answers and recall history in the local profile, including when full PGN storage is off. Nothing from training is sent through reporting. **Clear all profile data** also removes training data. Deleting one game does not remove its deduplicated training positions.
+
+In **Game → Play**, choose Balanced, Attacking or Solid. Optional adaptive difficulty adjusts the target by 50 points on **New game** after a completed local win or loss; draws leave it unchanged. Abandoned games and imported games do not count. All bot ratings are approximate, and styles affect strength. The included benchmark does not establish a Chess.com-equivalent Elo.
+
+The downloaded-game library fetches 100 summaries per page from SQLite. Opening a selected game loads its complete record. Full-profile insight aggregation still considers the broader dataset.
+
+### Developer verification
+
+```bash
+QT_QPA_PLATFORM=offscreen python -m unittest discover -p 'test*.py' -q
+python -m tools.library_benchmark --games 10000 --output /tmp/library-benchmark.json
+python -m tools.bot_benchmark matches --engine /path/to/stockfish --output /tmp/bot-matches.jsonl --games 100 --nodes 1000
+python -m tools.bot_benchmark positions --engine /path/to/stockfish --pgn /path/to/games.pgn --output /tmp/bot-positions.jsonl
+```
+
+Repeat a bot command with the same output to resume completed games/positions. Use a new output for changed engine/data/configuration; `--games` may be increased to extend a match run. `--seed` controls move sampling; engine internals may still vary. Match searches use fixed node budgets and both colors, exclude truncated games from scores, and report a conservative 95% score interval. PGN position logs include game-based folds and candidate coverage; they contain game positions and should stay local for personal PGNs. This is evaluation tooling, not a fitted human model. See [v3 validation](benchmarks/V3_VALIDATION.md) for measured results and limits.
 
 ## Run the app
 

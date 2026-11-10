@@ -49,7 +49,7 @@ class TrainingPage(QWidget):
             self.summary.setText('Training unavailable: profile storage could not be opened.')
             return
         progress = self.store.progress()
-        detail = ' · '.join(f'{topic}: {correct or 0}/{attempts or 0} recalled ({count} positions)'
+        detail = ' · '.join(f'{topic}: {correct or 0}/{attempts or 0} recalled ({count} {'position' if count == 1 else 'positions'})'
                             for topic, count, attempts, correct in progress)
         self.summary.setText(f'Train today · {len(self.store.due())} ready (up to 5 per session).\n' +
                              (detail or 'Review a game or practice an opening to add positions.'))

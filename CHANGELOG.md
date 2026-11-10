@@ -1,5 +1,26 @@
 # Changelog
 
+## [v3.0.0] - 2026-11-10
+
+### Added
+
+- Train today: a local queue of up to five due positions from newly reviewed mistakes and opening drills, with saved recall results and progress by topic. Correct recalls return after 1, 2, 4 days and longer; missed or revealed answers return after ten minutes.
+- Board-based opening recall with a repertoire hint, replacing multiple-choice answers.
+- Balanced, Attacking and Solid bot styles, plus optional between-game difficulty adjustments after completed local games. Bot ratings and style effects remain approximate.
+- Resumable bot match and PGN-position benchmarks with engine/data fingerprints, candidate coverage, game-level folds, saved results and match-score uncertainty.
+- Cross-platform pull-request test workflow.
+
+### Changed
+
+- Downloaded-game library pages and filters query SQLite for at most 100 summaries; full review data is loaded for selected games. Search is debounced and no longer rebuilds profile insights.
+- Extracted training persistence, daily training UI, bot sampling and library queries into separate modules. Clearing all profile data also clears training positions and recall history.
+- Release builds discover all test modules. Branch pushes verify builds; tags and manual dispatch publish releases.
+
+### Validation limits
+
+- The six-game bot run is a smoke check, not Elo calibration. Representative human PGNs, especially 900–1319, and longer match runs are still required.
+- The synthetic 10,000-reviewed-game benchmark measures database query results, not full profile-insight rendering.
+
 ## [v2.1.1.2] - 2026-11-07
 
 ### Added
