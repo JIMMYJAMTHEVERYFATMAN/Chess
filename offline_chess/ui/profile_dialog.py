@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..chesscom_data import *
+from ..game_library import GameLibrary
 from ..pgn_stats import PGN_STATS_VERSION, aggregate_pgn_stats
 from ..openings import *
 from ..review_logic import *
@@ -619,10 +620,12 @@ class ProfileDialog(QWidget):
         self.chesscom_library=QTableWidget(0,9);self.chesscom_library.setHorizontalHeaderLabels(["Date","Opponent","Result","Time control","Your rating","Opening","Review","Rules","PGN"])
         self._configure_chesscom_table(self.chesscom_library);self.chesscom_library.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.chesscom_library.cellDoubleClicked.connect(lambda *_:self.open_selected_chesscom());layout.addWidget(self.chesscom_library,2)
-        self.chesscom_search.textChanged.connect(self._refresh_chesscom_from_filters)
+        self._library_search_timer=QTimer(self);self._library_search_timer.setSingleShot(True);self._library_search_timer.setInterval(180)
+        self._library_search_timer.timeout.connect(self._refresh_chesscom_library_only)
+        self.chesscom_search.textChanged.connect(lambda:self._library_search_timer.start())
         self.chesscom_speed_filter.currentIndexChanged.connect(self._refresh_chesscom_from_filters)
         self.chesscom_date_filter.currentIndexChanged.connect(self._refresh_chesscom_from_filters)
-        self.chesscom_review_filter.currentIndexChanged.connect(self._refresh_chesscom_from_filters)
+        self.chesscom_review_filter.currentIndexChanged.connect(self._refresh_chesscom_library_only)
         library_actions=QHBoxLayout();self.chesscom_open=QPushButton("Open selected game");self.chesscom_open.clicked.connect(self.open_selected_chesscom);library_actions.addWidget(self.chesscom_open)
         self.chesscom_review_selected=QPushButton("Review selected");self.chesscom_review_selected.clicked.connect(self.review_selected_chesscom);library_actions.addWidget(self.chesscom_review_selected)
         self.chesscom_review_unreviewed=QPushButton("Review all unreviewed");self.chesscom_review_unreviewed.clicked.connect(self.review_unreviewed_chesscom);library_actions.addWidget(self.chesscom_review_unreviewed)
@@ -862,9 +865,13 @@ class ProfileDialog(QWidget):
         self._chesscom_library_page=0
         self.refresh_chesscom_library_async(self.chesscom_username.text())
 
+    def _refresh_chesscom_library_only(self,*_args):
+        self._chesscom_library_page=0
+        self._render_chesscom_library(None)
+
     def _change_chesscom_library_page(self,offset):
         self._chesscom_library_page=max(0,self._chesscom_library_page+int(offset))
-        self._render_chesscom_library(self._chesscom_library_matches)
+        self._render_chesscom_library(None)
 
     def _chesscom_castling_phases_for_games(self):
         if self._chesscom_castling_phase_by_id is None:
@@ -905,10 +912,34 @@ class ProfileDialog(QWidget):
         self.chesscom_scroll.ensureWidgetVisible(self.chesscom_library)
 
     def _render_chesscom_library(self,library_matches):
-        page_size=100;page_count=max(1,(len(library_matches)+page_size-1)//page_size)
-        self._chesscom_library_page=min(self._chesscom_library_page,page_count-1)
+        page_size=100
+        username=self.chesscom_username.text().strip()
+        # Explicit malformed rows are still renderable for diagnostics; normal lists use SQL.
+        use_database=bool(username) and (library_matches is None or all(game.get("game_id") for game in library_matches))
+        if use_database:
+            speed=self.chesscom_speed_filter.currentText()
+            review=self.chesscom_review_filter.currentText()
+            ids=None
+            if self._chesscom_castling_filter:
+                phases=self._chesscom_castling_phases_for_games()
+                ids=[key for key,phase in phases.items() if phase==self._chesscom_castling_filter]
+            try:
+                page_games,total,self._chesscom_library_page=GameLibrary(self.store).page(
+                    username, search=self.chesscom_search.text(),
+                    speed="" if speed=="All time controls" else speed,
+                    reviewed={"Not reviewed":False,"Reviewed":True}.get(review),
+                    page=self._chesscom_library_page,allowed_ids=ids)
+            except (ValueError,sqlite3.Error) as exc:
+                self.chesscom_status.setText(f"Could not load game library: {exc}")
+                return
+        else:
+            library_matches=library_matches or []
+            total=len(library_matches)
+            self._chesscom_library_page=min(self._chesscom_library_page,max(0,(total-1)//page_size))
+            start=self._chesscom_library_page*page_size
+            page_games=library_matches[start:start+page_size]
+        page_count=max(1,(total+page_size-1)//page_size)
         page_start=self._chesscom_library_page*page_size
-        page_games=library_matches[page_start:page_start+page_size]
         self.chesscom_library.setUpdatesEnabled(False)
         try:
             self.chesscom_library.setRowCount(0)
@@ -929,9 +960,9 @@ class ProfileDialog(QWidget):
         finally:
             self.chesscom_library.setUpdatesEnabled(True)
             self.chesscom_library.viewport().update()
-        first=page_start+1 if library_matches else 0
+        first=page_start+1 if total else 0
         last=page_start+len(page_games)
-        label=f"Showing {first:,}–{last:,} of {len(library_matches):,} matching games · 100 per page"
+        label=f"Showing {first:,}–{last:,} of {total:,} matching games · 100 per page"
         if self._chesscom_castling_filter:
             label+=f" · Castling: {self._chesscom_castling_filter} (click its row again to clear)"
         self.chesscom_library_page_label.setText(label)
@@ -1848,9 +1879,14 @@ class ProfileDialog(QWidget):
             self.chesscom_opening_mastery.setText("No games in this period had a detected first exit by your move in the loaded Lichess opening lines.")
 
     def _selected_chesscom_records(self):
-        return [self.chesscom_library.item(row,0).data(Qt.ItemDataRole.UserRole)
-                for row in sorted({index.row() for index in self.chesscom_library.selectionModel().selectedRows()})
-                if self.chesscom_library.item(row,0)]
+        records=[]
+        for index in sorted(self.chesscom_library.selectionModel().selectedRows(),key=lambda i:i.row()):
+            item=self.chesscom_library.item(index.row(),0)
+            if not item:continue
+            summary=item.data(Qt.ItemDataRole.UserRole)
+            record=GameLibrary(self.store).get(summary["game_id"]) if summary.get("game_id") else summary
+            if record:records.append(record)
+        return records
 
     def open_selected_chesscom(self):
         records=self._selected_chesscom_records()

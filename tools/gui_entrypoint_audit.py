@@ -320,7 +320,7 @@ rows.append({"group": "Lifecycle", "entry_point": "Close window", "action": "clo
              "details": f"engine thread running={window.thread.isRunning()}"})
 
 with (Path.cwd() / "GUI_ENTRYPOINT_TIMINGS.csv").open("w", newline="", encoding="utf-8-sig") as report:
-    writer = csv.DictWriter(report, fieldnames=["group", "entry_point", "action", "ui_response_ms", "end_to_end_ms", "status", "details"])
+    writer = csv.DictWriter(report, lineterminator="\n", fieldnames=["group", "entry_point", "action", "ui_response_ms", "end_to_end_ms", "status", "details"])
     writer.writeheader()
     writer.writerows(rows)
 

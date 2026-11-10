@@ -1,250 +1,255 @@
 ﻿group,entry_point,action,ui_response_ms,end_to_end_ms,status,details
-startup,Desktop window,construct + show + engine ready,81.6,timeout,timeout,engine_ready=False; engine status=Connecting to Stockfish…
-startup,Opening catalog,async catalog available,0.0,0.0,ok,entries=3865
-Game window,Chessboard,play e2-e4 and await Stockfish reply,4.2,timeout,error,user move legal=False; plies after response=1
+startup,Desktop window,construct + show + engine ready,116.0,1229.7,ok,engine_ready=True; engine status=Stockfish 19 · ready
+startup,Opening catalog,async catalog available,0.0,695.0,ok,entries=3865
+Game window,Chessboard,play e2-e4 and await Stockfish reply,3.6,501.0,ok,user move legal=True; plies after response=2
 Game actions,New game,reset after synthetic two-ply engine game,,,ok,model reset=True; widget reset=True; rendered board changed=True; move rows=0
 Game window,tab: Game,select tab,0.0,,ok,
-Game window,play: Tablebases · Off,button click,0.1,,ok,objectName=
-Game window,play: Profile,button click,132.0,,ok,objectName=
-Game window,play: Exit fullscreen,button click,0.0,,ok,objectName=
+Game window,play: Tablebases · Off,button click,0.2,,ok,objectName=
+Game window,play: Profile,button click,179.5,,ok,objectName=
+Game window,play: Exit fullscreen,button click,0.1,,ok,objectName=
 Game window,play: Scroll Left,button click,0.0,,ok,objectName=ScrollLeftButton
-Game window,play: Scroll Right,button click,0.1,,ok,objectName=ScrollRightButton
-Game window,review: Show board coordinates,button click,15.7,,ok,objectName=
-Game window,review: Animate move highlights,button click,7.4,,ok,objectName=
-Game window,review: Keep full PGNs in profile (uses more space),button click,4.3,,ok,objectName=
+Game window,play: Scroll Right,button click,0.0,,ok,objectName=ScrollRightButton
+Game window,review: Show board coordinates,button click,8.6,,ok,objectName=
+Game window,review: Animate move highlights,button click,4.8,,ok,objectName=
+Game window,review: Keep full PGNs in profile (uses more space),button click,1.8,,ok,objectName=
 Game window,review: Open saved game,button click,0.0,,ok,objectName=
 Game window,review: Delete selected game,button click,0.0,,ok,objectName=
 Game window,review: Delete stored PGNs,button click,0.1,,ok,objectName=
-Game window,tab: Position Lab,select tab,1.1,,ok,
-Game window,Position Lab: ♛,button click,0.7,,ok,objectName=
-Game window,Position Lab: ♜,button click,0.6,,ok,objectName=
-Game window,Position Lab: ♝,button click,0.6,,ok,objectName=
-Game window,Position Lab: ♞,button click,0.6,,ok,objectName=
-Game window,Position Lab: ♟,button click,0.6,,ok,objectName=
-Game window,Position Lab: ♚,button click,0.6,,ok,objectName=
-Game window,Position Lab: ♕,button click,0.6,,ok,objectName=
-Game window,Position Lab: ♖,button click,0.6,,ok,objectName=
+Game window,tab: Train today,select tab,1.2,,ok,
+Game window,Train today: Show answer,button click,0.0,,ok,objectName=
+Game window,Train today: Next position,button click,0.5,,ok,objectName=
+Game window,Train today: Train today · up to 5 positions,button click,0.8,,ok,objectName=
+Game window,tab: Position Lab,select tab,1.4,,ok,
+Game window,Position Lab: ♛,button click,1.2,,ok,objectName=
+Game window,Position Lab: ♜,button click,1.0,,ok,objectName=
+Game window,Position Lab: ♝,button click,0.8,,ok,objectName=
+Game window,Position Lab: ♞,button click,0.8,,ok,objectName=
+Game window,Position Lab: ♟,button click,0.8,,ok,objectName=
+Game window,Position Lab: ♚,button click,0.8,,ok,objectName=
+Game window,Position Lab: ♕,button click,1.1,,ok,objectName=
+Game window,Position Lab: ♖,button click,0.9,,ok,objectName=
 Game window,Position Lab: ♗,button click,0.7,,ok,objectName=
-Game window,Position Lab: ♘,button click,0.8,,ok,objectName=
-Game window,Position Lab: ♙,button click,0.6,,ok,objectName=
-Game window,Position Lab: ♔,button click,0.6,,ok,objectName=
-Game window,Position Lab: Move,button click,0.8,,ok,objectName=Button
+Game window,Position Lab: ♘,button click,1.4,,ok,objectName=
+Game window,Position Lab: ♙,button click,1.0,,ok,objectName=
+Game window,Position Lab: ♔,button click,1.1,,ok,objectName=
+Game window,Position Lab: Move,button click,0.7,,ok,objectName=Button
 Game window,Position Lab: Reset,button click,0.2,,ok,objectName=Button
-Game window,Position Lab: Clear,button click,0.1,,ok,objectName=Button
+Game window,Position Lab: Clear,button click,0.2,,ok,objectName=Button
 Game window,Position Lab: Flip,button click,0.0,,ok,objectName=Button
-Game window,Position Lab: unnamed button,button click,0.1,,ok,objectName=
-Game window,Position Lab: Copy,button click,0.3,,ok,objectName=Button
+Game window,Position Lab: unnamed button,button click,0.0,,ok,objectName=
+Game window,Position Lab: Copy,button click,0.6,,ok,objectName=Button
 Game window,Position Lab: Load FEN,button click,0.2,,ok,objectName=Button
 Game window,Position Lab: White,button click,0.0,,ok,objectName=
-Game window,Position Lab: Black,button click,0.5,,ok,objectName=
+Game window,Position Lab: Black,button click,0.7,,ok,objectName=
 Game window,Position Lab: 2s,button click,0.0,,ok,objectName=
 Game window,Position Lab: 4s,button click,0.0,,ok,objectName=
 Game window,Position Lab: 8s,button click,0.0,,ok,objectName=
-Game window,Position Lab: Castling rights,button click,0.2,,ok,objectName=CastlingToggle
+Game window,Position Lab: Castling rights,button click,0.5,,ok,objectName=CastlingToggle
 Game window,Position Lab: White · O-O,button click,,,skipped,disabled in the current state
 Game window,Position Lab: White · O-O-O,button click,,,skipped,disabled in the current state
 Game window,Position Lab: Black · O-O,button click,,,skipped,disabled in the current state
 Game window,Position Lab: Black · O-O-O,button click,,,skipped,disabled in the current state
 Game window,Position Lab: ← Back,button click,,,skipped,disabled in the current state
 Game window,Position Lab: Forward →,button click,,,skipped,disabled in the current state
-Game window,tab: Endgame Trainer,select tab,1.2,,ok,
-Game window,Endgame Trainer: Move pieces,button click,0.6,,ok,objectName=
+Game window,tab: Endgame Trainer,select tab,1.8,,ok,
+Game window,Endgame Trainer: Move pieces,button click,0.8,,ok,objectName=
 Game window,Endgame Trainer: Flip board,button click,0.0,,ok,objectName=
 Game window,Endgame Trainer: Clear,button click,0.1,,ok,objectName=
-Game window,Endgame Trainer: Load,button click,0.2,,ok,objectName=
+Game window,Endgame Trainer: Load,button click,0.1,,ok,objectName=
 Game window,Endgame Trainer: Generate random endgame,button click,0.3,,ok,objectName=
-Game window,Endgame Trainer: Start this endgame  →,button click,0.3,,ok,objectName=PrimaryButton
-Game window,tab: Opening Trainer,select tab,17.5,,ok,
-Game window,Opening Trainer: Practice most played,button click,0.0,,ok,objectName=
+Game window,Endgame Trainer: Start this endgame  →,button click,0.5,,ok,objectName=PrimaryButton
+Game window,tab: Opening Trainer,select tab,46.7,,ok,
+Game window,Opening Trainer: Practice most played,button click,0.1,,ok,objectName=
 Game window,Opening Trainer: Practice lowest win rate,button click,0.0,,ok,objectName=
-Game window,Opening Trainer: Practice selected opening,button click,1.0,,ok,objectName=
-Game window,tab: Puzzles,select tab,0.9,,ok,
+Game window,Opening Trainer: Practice selected opening,button click,2.5,,ok,objectName=
+Game window,tab: Puzzles,select tab,1.6,,ok,
 Game window,Puzzles: Find puzzle in game,button click,,,skipped,worker-intensive action excluded from response-time sweep
 Game window,Puzzles: Generate puzzle,button click,,,skipped,worker-intensive action excluded from response-time sweep
 Game window,Puzzles: Hint,button click,,,skipped,disabled in the current state
 Game window,Puzzles: Show solution,button click,,,skipped,disabled in the current state
-Game window,tab: Profile,select tab,1.0,,ok,
+Game window,tab: Profile,select tab,1.7,,ok,
 Game window,tab: Set up position,select tab,0.1,,ok,
 Game window,tab: Challenge,select tab,0.1,,ok,
 Game window,combo: Classic Green,select Classic Green,0.0,,ok,
-Game window,combo: Classic Green,select Walnut,7.7,,ok,
-Game window,combo: Classic Green,select Ocean Blue,6.7,,ok,
-Game window,combo: Classic Green,select Soft Violet,5.9,,ok,
-Game window,combo: Classic Green,select Slate,6.3,,ok,
-Game window,combo: Classic Green,select Mint,6.9,,ok,
-Game window,combo: Classic Green,select Crimson,6.1,,ok,
-Game window,combo: Classic Green,select Graphite,6.1,,ok,
-Game window,combo: Classic Green,select Desert,5.9,,ok,
-Game window,combo: Classic Green,select Nordic,6.1,,ok,
-Game window,combo: Classic Green,select Rose,7.7,,ok,
-Game window,combo: Classic Green,select High Contrast,6.2,,ok,
-Game window,combo: Classic Green,select Monochrome,6.5,,ok,
+Game window,combo: Classic Green,select Walnut,6.8,,ok,
+Game window,combo: Classic Green,select Ocean Blue,8.3,,ok,
+Game window,combo: Classic Green,select Soft Violet,10.3,,ok,
+Game window,combo: Classic Green,select Slate,8.5,,ok,
+Game window,combo: Classic Green,select Mint,7.1,,ok,
+Game window,combo: Classic Green,select Crimson,6.2,,ok,
+Game window,combo: Classic Green,select Graphite,5.4,,ok,
+Game window,combo: Classic Green,select Desert,5.4,,ok,
+Game window,combo: Classic Green,select Nordic,5.5,,ok,
+Game window,combo: Classic Green,select Rose,5.6,,ok,
+Game window,combo: Classic Green,select High Contrast,8.0,,ok,
+Game window,combo: Classic Green,select Monochrome,7.4,,ok,
 Game window,combo: Tournament,select Tournament,0.0,,ok,
-Game window,combo: Tournament,select Modern,8.4,,ok,
-Game window,combo: Tournament,select Letters,7.4,,ok,
-Game window,combo: Tournament,select Badge,8.0,,ok,
-Game window,combo: Tournament,select Bold,7.3,,ok,
+Game window,combo: Tournament,select Modern,6.0,,ok,
+Game window,combo: Tournament,select Letters,6.8,,ok,
+Game window,combo: Tournament,select Badge,6.3,,ok,
+Game window,combo: Tournament,select Bold,5.0,,ok,
 Game window,combo: All time,select All time,0.0,,ok,
-Game window,combo: All time,select Last 30 days,1.2,,ok,
-Game window,combo: All time,select Last 90 days,1.4,,ok,
-Game window,combo: All time,select This year,1.2,,ok,
+Game window,combo: All time,select Last 30 days,0.6,,ok,
+Game window,combo: All time,select Last 90 days,0.5,,ok,
+Game window,combo: All time,select This year,0.4,,ok,
 Game window,combo: All results,select All results,0.0,,ok,
-Game window,combo: All results,select Wins,1.5,,ok,
-Game window,combo: All results,select Draws,1.5,,ok,
-Game window,combo: All results,select Losses,1.3,,ok,
+Game window,combo: All results,select Wins,0.6,,ok,
+Game window,combo: All results,select Draws,0.7,,ok,
+Game window,combo: All results,select Losses,0.6,,ok,
 Game window,combo: Both colors,select Both colors,0.0,,ok,
-Game window,combo: Both colors,select As White,1.3,,ok,
-Game window,combo: Both colors,select As Black,1.3,,ok,
+Game window,combo: Both colors,select As White,0.6,,ok,
+Game window,combo: Both colors,select As Black,0.5,,ok,
 Game window,combo: All openings,select All openings,0.0,,ok,
 Game window,combo: Any opponent,select Any opponent,0.0,,ok,
-Game window,combo: Any opponent,select Below 1000,1.2,,ok,
-Game window,combo: Any opponent,select 1000–1599,1.2,,ok,
-Game window,combo: Any opponent,select 1600–2199,1.2,,ok,
-Game window,combo: Any opponent,select 2200+,1.4,,ok,
-Position Lab,Reset position,button click,0.4,,ok,
-Position Lab,Load valid FEN,set starting FEN,0.1,,ok,
+Game window,combo: Any opponent,select Below 1000,0.7,,ok,
+Game window,combo: Any opponent,select 1000–1599,0.5,,ok,
+Game window,combo: Any opponent,select 1600–2199,0.5,,ok,
+Game window,combo: Any opponent,select 2200+,0.4,,ok,
+Position Lab,Reset position,button click,0.5,,ok,
+Position Lab,Load valid FEN,set starting FEN,0.2,,ok,
 Position Lab,Load invalid FEN,reject malformed FEN,0.1,,ok,
-Position Lab,Clear position,button click,0.1,,ok,
+Position Lab,Clear position,button click,0.2,,ok,
 Position Lab,Reset position,restore start,0.2,,ok,
-Position Lab,Analyze position,request Stockfish analysis,0.0,12018.2,error,analysis completion observed=False; selected side=White; legal candidates=0
-Profile,Profile tab,open embedded profile,5.9,,ok,tabs=3; embedded=True
+Position Lab,Analyze position,request Stockfish analysis,0.1,1963.0,ok,analysis completion observed=True; selected side=White; legal candidates=3
+Profile,Profile tab,open embedded profile,8.7,,ok,tabs=3; embedded=True
 Profile,tab: Overview,select tab,0.0,,ok,
 Profile,unnamed button,button click,0.0,,ok,profile tab=Overview; objectName=
 Profile,Find archives,button click,0.3,,ok,profile tab=Overview; objectName=
-Profile,Download all months,button click,0.1,,ok,profile tab=Overview; objectName=
+Profile,Download all months,button click,0.0,,ok,profile tab=Overview; objectName=
 Profile,Show breakdown,button click,0.0,,ok,profile tab=Overview; objectName=
 Profile,Download selected games,button click,0.1,,ok,profile tab=Overview; objectName=
 Profile,Download this month,button click,0.0,,ok,profile tab=Overview; objectName=
 Profile,Open selected game,button click,0.0,,ok,profile tab=Overview; objectName=
-Profile,Review selected,button click,0.1,,ok,profile tab=Overview; objectName=
+Profile,Review selected,button click,0.0,,ok,profile tab=Overview; objectName=
 Profile,Review all unreviewed,button click,0.0,,ok,profile tab=Overview; objectName=
-Profile,Open PGN folder,button click,0.1,,ok,profile tab=Overview; objectName=
-Profile,Remove selected,button click,0.2,,ok,profile tab=Overview; objectName=
-Profile,Lookup countries,button click,0.0,,ok,profile tab=Overview; objectName=
+Profile,Open PGN folder,button click,0.0,,ok,profile tab=Overview; objectName=
+Profile,Remove selected,button click,0.5,,ok,profile tab=Overview; objectName=
+Profile,Lookup countries,button click,0.1,,ok,profile tab=Overview; objectName=
 Profile,Stop lookups,button click,0.0,,ok,profile tab=Overview; objectName=
-Profile,Sound effects,button click,5.8,,ok,profile tab=Overview; objectName=
-Profile,Čeština (Czech language),button click,224.6,,ok,profile tab=Overview; objectName=
-Profile,Načíst databázi Lichess,button click,0.0,,ok,profile tab=Overview; objectName=
+Profile,Sound effects,button click,2.3,,ok,profile tab=Overview; objectName=
+Profile,Čeština (Czech language),button click,381.4,,ok,profile tab=Overview; objectName=
+Profile,Načíst databázi Lichess,button click,0.1,,ok,profile tab=Overview; objectName=
 Profile,Načíst váženou knihu,button click,0.1,,ok,profile tab=Overview; objectName=
-Profile,Nahlásit chybu,button click,0.9,,ok,profile tab=Overview; objectName=FeedbackButton
-Profile,Navrhnout funkci,button click,1.5,,ok,profile tab=Overview; objectName=FeedbackButton
+Profile,Nahlásit chybu,button click,2.7,,ok,profile tab=Overview; objectName=FeedbackButton
+Profile,Navrhnout funkci,button click,0.8,,ok,profile tab=Overview; objectName=FeedbackButton
 Profile,Share usage check-ins with update checks,button click,,,skipped,privacy setting intentionally excluded from automated interaction
-Profile,Odstranit všechna uložená data partií,button click,0.0,,ok,profile tab=Overview; objectName=
-Profile,Zobrazit souřadnice šachovnice,button click,10.5,,ok,profile tab=Overview; objectName=
-Profile,Animovat zvýraznění tahů,button click,6.7,,ok,profile tab=Overview; objectName=
-Profile,Ukládat celé PGN v profilu (zabírá více místa),button click,4.1,,ok,profile tab=Overview; objectName=
+Profile,Odstranit všechna uložená data partií,button click,0.1,,ok,profile tab=Overview; objectName=
+Profile,Zobrazit souřadnice šachovnice,button click,7.3,,ok,profile tab=Overview; objectName=
+Profile,Animovat zvýraznění tahů,button click,5.9,,ok,profile tab=Overview; objectName=
+Profile,Ukládat celé PGN v profilu (zabírá více místa),button click,1.5,,ok,profile tab=Overview; objectName=
 Profile,Otevřít uloženou partii,button click,0.0,,ok,profile tab=Overview; objectName=
 Profile,Odstranit vybranou partii,button click,0.0,,ok,profile tab=Overview; objectName=
 Profile,Odstranit uložené PGN,button click,0.0,,ok,profile tab=Overview; objectName=
-Profile,combo: Monochrome,select Classic Green,6.6,,ok,
-Profile,combo: Monochrome,select Walnut,7.1,,ok,
-Profile,combo: Monochrome,select Ocean Blue,6.6,,ok,
-Profile,combo: Monochrome,select Soft Violet,7.2,,ok,
-Profile,combo: Monochrome,select Slate,6.9,,ok,
-Profile,combo: Monochrome,select Mint,8.8,,ok,
-Profile,combo: Monochrome,select Crimson,6.3,,ok,
-Profile,combo: Monochrome,select Graphite,6.3,,ok,
-Profile,combo: Monochrome,select Desert,6.2,,ok,
-Profile,combo: Monochrome,select Nordic,6.3,,ok,
-Profile,combo: Monochrome,select Rose,6.6,,ok,
-Profile,combo: Monochrome,select High Contrast,6.8,,ok,
-Profile,combo: Monochrome,select Monochrome,6.7,,ok,
-Profile,combo: Bold,select Tournament,7.6,,ok,
-Profile,combo: Bold,select Modern,8.2,,ok,
-Profile,combo: Bold,select Letters,7.8,,ok,
-Profile,combo: Bold,select Badge,7.2,,ok,
-Profile,combo: Bold,select Bold,7.0,,ok,
-Profile,combo: Letos,select Za celé období,1.3,,ok,
-Profile,combo: Letos,select Posledních 30 dní,1.4,,ok,
-Profile,combo: Letos,select Posledních 90 dní,1.2,,ok,
-Profile,combo: Letos,select Letos,1.2,,ok,
-Profile,combo: Prohry,select Všechny výsledky,1.2,,ok,
-Profile,combo: Prohry,select Výhry,1.4,,ok,
-Profile,combo: Prohry,select Remízy,1.3,,ok,
-Profile,combo: Prohry,select Prohry,1.2,,ok,
-Profile,combo: Za černé,select Obě barvy,1.2,,ok,
-Profile,combo: Za černé,select Za bílé,1.5,,ok,
-Profile,combo: Za černé,select Za černé,1.2,,ok,
+Profile,combo: Monochrome,select Classic Green,5.1,,ok,
+Profile,combo: Monochrome,select Walnut,4.5,,ok,
+Profile,combo: Monochrome,select Ocean Blue,4.4,,ok,
+Profile,combo: Monochrome,select Soft Violet,4.8,,ok,
+Profile,combo: Monochrome,select Slate,5.5,,ok,
+Profile,combo: Monochrome,select Mint,8.2,,ok,
+Profile,combo: Monochrome,select Crimson,6.0,,ok,
+Profile,combo: Monochrome,select Graphite,4.7,,ok,
+Profile,combo: Monochrome,select Desert,8.1,,ok,
+Profile,combo: Monochrome,select Nordic,6.1,,ok,
+Profile,combo: Monochrome,select Rose,6.3,,ok,
+Profile,combo: Monochrome,select High Contrast,4.7,,ok,
+Profile,combo: Monochrome,select Monochrome,5.1,,ok,
+Profile,combo: Bold,select Tournament,5.7,,ok,
+Profile,combo: Bold,select Modern,5.5,,ok,
+Profile,combo: Bold,select Letters,5.2,,ok,
+Profile,combo: Bold,select Badge,5.3,,ok,
+Profile,combo: Bold,select Bold,4.9,,ok,
+Profile,combo: Letos,select Za celé období,0.7,,ok,
+Profile,combo: Letos,select Posledních 30 dní,0.5,,ok,
+Profile,combo: Letos,select Posledních 90 dní,0.6,,ok,
+Profile,combo: Letos,select Letos,0.5,,ok,
+Profile,combo: Prohry,select Všechny výsledky,0.5,,ok,
+Profile,combo: Prohry,select Výhry,0.6,,ok,
+Profile,combo: Prohry,select Remízy,0.5,,ok,
+Profile,combo: Prohry,select Prohry,0.5,,ok,
+Profile,combo: Za černé,select Obě barvy,0.4,,ok,
+Profile,combo: Za černé,select Za bílé,0.5,,ok,
+Profile,combo: Za černé,select Za černé,0.8,,ok,
 Profile,combo: All openings,select All openings,0.0,,ok,
-Profile,combo: 2200+,select Libovolný soupeř,1.3,,ok,
-Profile,combo: 2200+,select Below 1000,1.4,,ok,
-Profile,combo: 2200+,select 1000–1599,1.3,,ok,
-Profile,combo: 2200+,select 1600–2199,2.4,,ok,
-Profile,combo: 2200+,select 2200+,1.3,,ok,
-Profile,tab: Nastavení,select tab,1.4,,ok,
+Profile,combo: 2200+,select Libovolný soupeř,0.6,,ok,
+Profile,combo: 2200+,select Below 1000,0.6,,ok,
+Profile,combo: 2200+,select 1000–1599,0.7,,ok,
+Profile,combo: 2200+,select 1600–2199,0.5,,ok,
+Profile,combo: 2200+,select 2200+,0.4,,ok,
+Profile,tab: Nastavení,select tab,2.1,,ok,
 Profile,unnamed button,button click,0.0,,ok,profile tab=Nastavení; objectName=
-Profile,Find archives,button click,0.2,,ok,profile tab=Nastavení; objectName=
+Profile,Find archives,button click,0.3,,ok,profile tab=Nastavení; objectName=
 Profile,Download all months,button click,0.0,,ok,profile tab=Nastavení; objectName=
 Profile,Hide breakdown,button click,0.1,,ok,profile tab=Nastavení; objectName=
 Profile,Download selected games,button click,0.1,,ok,profile tab=Nastavení; objectName=
 Profile,Download this month,button click,0.0,,ok,profile tab=Nastavení; objectName=
 Profile,Open selected game,button click,0.1,,ok,profile tab=Nastavení; objectName=
 Profile,Review selected,button click,0.1,,ok,profile tab=Nastavení; objectName=
-Profile,Review all unreviewed,button click,0.1,,ok,profile tab=Nastavení; objectName=
-Profile,Open PGN folder,button click,0.1,,ok,profile tab=Nastavení; objectName=
-Profile,Remove selected,button click,0.2,,ok,profile tab=Nastavení; objectName=
+Profile,Review all unreviewed,button click,0.0,,ok,profile tab=Nastavení; objectName=
+Profile,Open PGN folder,button click,0.0,,ok,profile tab=Nastavení; objectName=
+Profile,Remove selected,button click,0.3,,ok,profile tab=Nastavení; objectName=
 Profile,Lookup countries,button click,0.0,,ok,profile tab=Nastavení; objectName=
 Profile,Stop lookups,button click,0.0,,ok,profile tab=Nastavení; objectName=
-Profile,Zobrazit souřadnice šachovnice,button click,8.5,,ok,profile tab=Nastavení; objectName=
-Profile,Animovat zvýraznění tahů,button click,8.4,,ok,profile tab=Nastavení; objectName=
-Profile,Ukládat celé PGN v profilu (zabírá více místa),button click,4.2,,ok,profile tab=Nastavení; objectName=
+Profile,Zobrazit souřadnice šachovnice,button click,5.5,,ok,profile tab=Nastavení; objectName=
+Profile,Animovat zvýraznění tahů,button click,5.8,,ok,profile tab=Nastavení; objectName=
+Profile,Ukládat celé PGN v profilu (zabírá více místa),button click,1.7,,ok,profile tab=Nastavení; objectName=
 Profile,Otevřít uloženou partii,button click,0.0,,ok,profile tab=Nastavení; objectName=
 Profile,Odstranit vybranou partii,button click,0.0,,ok,profile tab=Nastavení; objectName=
 Profile,Odstranit uložené PGN,button click,0.0,,ok,profile tab=Nastavení; objectName=
-Profile,Zvukové efekty,button click,5.4,,ok,profile tab=Nastavení; objectName=
-Profile,Čeština (Czech language),button click,29.8,,ok,profile tab=Nastavení; objectName=
+Profile,Zvukové efekty,button click,1.8,,ok,profile tab=Nastavení; objectName=
+Profile,Čeština (Czech language),button click,36.2,,ok,profile tab=Nastavení; objectName=
 Profile,Load Lichess DB,button click,0.0,,ok,profile tab=Nastavení; objectName=
 Profile,Load weighted book,button click,0.1,,ok,profile tab=Nastavení; objectName=
-Profile,Report a bug,button click,0.6,,ok,profile tab=Nastavení; objectName=FeedbackButton
-Profile,Suggest a feature,button click,0.7,,ok,profile tab=Nastavení; objectName=FeedbackButton
+Profile,Report a bug,button click,0.7,,ok,profile tab=Nastavení; objectName=FeedbackButton
+Profile,Suggest a feature,button click,1.1,,ok,profile tab=Nastavení; objectName=FeedbackButton
 Profile,Share usage check-ins with update checks,button click,,,skipped,privacy setting intentionally excluded from automated interaction
-Profile,Delete all saved game data,button click,0.0,,ok,profile tab=Nastavení; objectName=
+Profile,Delete all saved game data,button click,0.1,,ok,profile tab=Nastavení; objectName=
 Profile,Cancel,button click,0.0,,ok,profile tab=Nastavení; objectName=
-Profile,tab: Chess.com,select tab,6.2,,ok,
-Profile,Show board coordinates,button click,9.8,,ok,profile tab=Chess.com; objectName=
-Profile,Animate move highlights,button click,6.1,,ok,profile tab=Chess.com; objectName=
+Profile,tab: Chess.com,select tab,17.1,,ok,
+Profile,Show board coordinates,button click,6.4,,ok,profile tab=Chess.com; objectName=
+Profile,Animate move highlights,button click,5.6,,ok,profile tab=Chess.com; objectName=
 Profile,unnamed button,button click,0.0,,ok,profile tab=Chess.com; objectName=
 Profile,Keep full PGNs in profile (uses more space),button click,4.1,,ok,profile tab=Chess.com; objectName=
 Profile,Open saved game,button click,0.0,,ok,profile tab=Chess.com; objectName=
 Profile,Delete selected game,button click,0.0,,ok,profile tab=Chess.com; objectName=
 Profile,Delete stored PGNs,button click,0.0,,ok,profile tab=Chess.com; objectName=
-Profile,Sound effects,button click,4.0,,ok,profile tab=Chess.com; objectName=
-Profile,Čeština (Czech language),button click,226.4,,ok,profile tab=Chess.com; objectName=
+Profile,Sound effects,button click,1.9,,ok,profile tab=Chess.com; objectName=
+Profile,Čeština (Czech language),button click,341.7,,ok,profile tab=Chess.com; objectName=
 Profile,Načíst databázi Lichess,button click,0.0,,ok,profile tab=Chess.com; objectName=
-Profile,Načíst váženou knihu,button click,0.1,,ok,profile tab=Chess.com; objectName=
-Profile,Nahlásit chybu,button click,0.6,,ok,profile tab=Chess.com; objectName=FeedbackButton
-Profile,Navrhnout funkci,button click,0.6,,ok,profile tab=Chess.com; objectName=FeedbackButton
+Profile,Načíst váženou knihu,button click,0.2,,ok,profile tab=Chess.com; objectName=
+Profile,Nahlásit chybu,button click,0.7,,ok,profile tab=Chess.com; objectName=FeedbackButton
+Profile,Navrhnout funkci,button click,0.5,,ok,profile tab=Chess.com; objectName=FeedbackButton
 Profile,Share usage check-ins with update checks,button click,,,skipped,privacy setting intentionally excluded from automated interaction
 Profile,Odstranit všechna uložená data partií,button click,0.0,,ok,profile tab=Chess.com; objectName=
-Profile,Find archives,button click,0.3,,ok,profile tab=Chess.com; objectName=
+Profile,Find archives,button click,0.6,,ok,profile tab=Chess.com; objectName=
 Profile,Download all months,button click,0.0,,ok,profile tab=Chess.com; objectName=
-Profile,Show breakdown,button click,0.6,,ok,profile tab=Chess.com; objectName=
-Profile,Download selected games,button click,0.1,,ok,profile tab=Chess.com; objectName=
+Profile,Show breakdown,button click,0.4,,ok,profile tab=Chess.com; objectName=
+Profile,Download selected games,button click,0.2,,ok,profile tab=Chess.com; objectName=
 Profile,Download this month,button click,0.0,,ok,profile tab=Chess.com; objectName=
 Profile,Open selected game,button click,0.1,,ok,profile tab=Chess.com; objectName=
 Profile,Review selected,button click,0.1,,ok,profile tab=Chess.com; objectName=
 Profile,Review all unreviewed,button click,0.1,,ok,profile tab=Chess.com; objectName=
 Profile,Open PGN folder,button click,0.1,,ok,profile tab=Chess.com; objectName=
-Profile,Remove selected,button click,0.4,,ok,profile tab=Chess.com; objectName=
+Profile,Remove selected,button click,0.2,,ok,profile tab=Chess.com; objectName=
 Profile,Lookup countries,button click,0.0,,ok,profile tab=Chess.com; objectName=
 Profile,Stop lookups,button click,0.0,,ok,profile tab=Chess.com; objectName=
 Profile,Zrušit,button click,0.0,,ok,profile tab=Chess.com; objectName=
+Profile,combo: Saved profiles…,select Saved profiles…,0.0,,ok,
 Profile,combo: Za celé období,select Za celé období,0.0,,ok,
 Profile,combo: Za celé období,select Last 7 days,0.2,,ok,
-Profile,combo: Za celé období,select Posledních 30 dní,0.1,,ok,
-Profile,combo: Za celé období,select Posledních 90 dní,0.2,,ok,
-Profile,combo: Za celé období,select Last 365 days,0.3,,ok,
+Profile,combo: Za celé období,select Posledních 30 dní,0.2,,ok,
+Profile,combo: Za celé období,select Posledních 90 dní,0.1,,ok,
+Profile,combo: Za celé období,select Last 365 days,0.1,,ok,
 Profile,combo: Za celé období,select Letos,0.2,,ok,
 Profile,combo: Za celé období controls,select Za celé období controls,0.0,,ok,
-Profile,combo: Za celé období controls,select Bullet,0.3,,ok,
-Profile,combo: Za celé období controls,select Blitz,0.1,,ok,
-Profile,combo: Za celé období controls,select Rapid,0.2,,ok,
+Profile,combo: Za celé období controls,select Bullet,0.2,,ok,
+Profile,combo: Za celé období controls,select Blitz,0.2,,ok,
+Profile,combo: Za celé období controls,select Rapid,0.1,,ok,
 Profile,combo: Za celé období controls,select Daily,0.2,,ok,
 Profile,combo: All downloaded,select All downloaded,0.0,,ok,
-Profile,combo: All downloaded,select Not reviewed,0.3,,ok,
-Profile,combo: All downloaded,select Reviewed,0.3,,ok,
-Game data,Import PGN,load synthetic two-ply game,2.3,,ok,plies=2; final_fen=rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2
-Game data,Export PGN,write then parse exported PGN,0.8,,ok,exported=201 bytes; reparsed=True; result=*
-Review workflow,Import synthetic review game,load eight-ply fixture,2.9,,ok,
-Review workflow,Review progress dialog,cancel after first completed synthetic ply,15143.2,timeout,error,first progress observed=False; partial plies=0 of 8; dialog closed=True; analysis controls restored=True; status=Imported 8 plies
-Lifecycle,Close window,close event + worker shutdown,,,thread still running,engine thread running=True
+Profile,combo: All downloaded,select Not reviewed,0.1,,ok,
+Profile,combo: All downloaded,select Reviewed,0.1,,ok,
+Game data,Import PGN,load synthetic two-ply game,1.4,,ok,plies=2; final_fen=rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2
+Game data,Export PGN,write then parse exported PGN,0.6,,ok,exported=190 bytes; reparsed=True; result=*
+Review workflow,Import synthetic review game,load eight-ply fixture,2.3,,ok,
+Review workflow,Review progress dialog,cancel after first completed synthetic ply,724.9,465.7,ok,first progress observed=True; partial plies=2 of 8; dialog closed=True; analysis controls restored=True; status=Review cancelled · partial results shown
+Lifecycle,Close window,close event + worker shutdown,,,ok,engine thread running=False

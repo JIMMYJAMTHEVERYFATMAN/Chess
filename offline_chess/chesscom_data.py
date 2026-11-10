@@ -399,6 +399,7 @@ class ProfileStore:
                 db.execute("ALTER TABLE chesscom_games ADD COLUMN pgn_stats_version TEXT NOT NULL DEFAULT ''")
             if "pgn_stats_json" not in imported_columns:
                 db.execute("ALTER TABLE chesscom_games ADD COLUMN pgn_stats_json TEXT NOT NULL DEFAULT '{}'")
+            db.execute("CREATE INDEX IF NOT EXISTS chesscom_library_order ON chesscom_games(username COLLATE NOCASE,played_at DESC,game_id)")
             db.commit()
         finally:db.close()
         self._migrate_saved_accuracy_model()
@@ -713,6 +714,9 @@ class ProfileStore:
         try:
             imported=[row[0] for row in db.execute("SELECT pgn_path FROM chesscom_games")]
             db.execute("DELETE FROM games");db.execute("DELETE FROM chesscom_games")
+            for table in ("training_cards", "training_attempts"):
+                if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",(table,)).fetchone():
+                    db.execute("DELETE FROM " + table)
             db.execute("DELETE FROM settings WHERE key='puzzle_challenge_high_score'");db.commit()
         finally:db.close()
         for path in imported:

@@ -1,0 +1,10 @@
+{
+  "games": 10000,
+  "review_bytes_per_game": 23216,
+  "full_query_ms": 774.74,
+  "page_query_ms": 16.61,
+  "full_result_bytes": 252688890,
+  "page_result_bytes": 41083,
+  "page_rows": 100,
+  "scope": "Local SQLite queries; excludes Qt rendering and whole-profile insight aggregation"
+}

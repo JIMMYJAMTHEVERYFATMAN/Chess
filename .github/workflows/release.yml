@@ -59,7 +59,7 @@ jobs:
 
       - name: Run test suite
         shell: pwsh
-        run: '& $env:OFFLINE_CHESS_BUILD_PYTHON -m unittest test_review_analysis test_telemetry test_release_hardening -q'
+        run: '& $env:OFFLINE_CHESS_BUILD_PYTHON -m unittest discover -p "test*.py" -q'
 
       - name: Configure public check-in collector URL
         shell: pwsh
@@ -149,6 +149,7 @@ jobs:
           merge-multiple: true
 
       - name: Publish release and application
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
