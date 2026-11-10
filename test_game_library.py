@@ -1,3 +1,4 @@
+from contextlib import closing
 import os
 import tempfile
 import unittest
@@ -14,7 +15,7 @@ class GameLibraryTests(unittest.TestCase):
         self.env=patch.dict(os.environ,{'LOCALAPPDATA':self.temp.name,'XDG_DATA_HOME':self.temp.name})
         self.env.start()
         self.store=ProfileStore()
-        with self.store.connect() as db:
+        with closing(self.store.connect()) as db, db:
             for i in range(205):
                 db.execute('''INSERT INTO chesscom_games(game_id,username,played_at,result,user_color,user_result,
                     opponent,time_control,time_class,rated,rules,opening,pgn_path,reviewed,review_json)
@@ -43,7 +44,7 @@ class GameLibraryTests(unittest.TestCase):
         self.assertEqual(self.library.page('testplayer',allowed_ids=['1','2','2'])[1],2)
 
     def test_legacy_eco_only_opening_remains_searchable_by_name(self):
-        with self.store.connect() as db:
+        with closing(self.store.connect()) as db, db:
             db.execute("UPDATE chesscom_games SET opening='A02'")
         self.assertEqual(self.library.page('testplayer',search='Bird')[1],205)
 

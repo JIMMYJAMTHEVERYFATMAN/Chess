@@ -1,3 +1,4 @@
+from contextlib import closing
 """Persistent, local spaced repetition shared by review and opening practice."""
 import hashlib
 import json
@@ -9,7 +10,7 @@ import chess
 class TrainingStore:
     def __init__(self, profile):
         self.profile = profile
-        with profile.connect() as db:
+        with closing(profile.connect()) as db, db:
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS training_cards(
                     card_id TEXT PRIMARY KEY, fen TEXT NOT NULL, answers TEXT NOT NULL,
@@ -28,7 +29,7 @@ class TrainingStore:
             raise ValueError('Training answers must be legal moves')
         # Same position/answer is one card even if encountered in multiple games.
         key = hashlib.sha256((fen + json.dumps(answers)).encode()).hexdigest()
-        with self.profile.connect() as db:
+        with closing(self.profile.connect()) as db, db:
             db.execute('INSERT OR IGNORE INTO training_cards(card_id,fen,answers,topic,source) VALUES(?,?,?,?,?)',
                        (key, fen, json.dumps(answers), topic, source))
         return key
@@ -51,14 +52,14 @@ class TrainingStore:
 
     def due(self, limit=5, now=None):
         now = time.time() if now is None else now
-        with self.profile.connect() as db:
+        with closing(self.profile.connect()) as db, db:
             db.row_factory = __import__('sqlite3').Row
             return [dict(row) for row in db.execute(
                 'SELECT * FROM training_cards WHERE due<=? ORDER BY due,card_id LIMIT ?', (now, limit))]
 
     def record(self, card_id, correct, now=None):
         now = time.time() if now is None else now
-        with self.profile.connect() as db:
+        with closing(self.profile.connect()) as db, db:
             row = db.execute('SELECT streak FROM training_cards WHERE card_id=?', (card_id,)).fetchone()
             if row is None:
                 raise KeyError(card_id)
@@ -69,5 +70,5 @@ class TrainingStore:
             db.execute('INSERT INTO training_attempts VALUES(?,?,?)', (card_id, now, int(correct)))
 
     def progress(self):
-        with self.profile.connect() as db:
+        with closing(self.profile.connect()) as db, db:
             return db.execute('SELECT topic,COUNT(*),SUM(attempts),SUM(correct) FROM training_cards GROUP BY topic ORDER BY topic').fetchall()

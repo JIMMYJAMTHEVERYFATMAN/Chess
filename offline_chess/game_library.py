@@ -1,3 +1,4 @@
+from contextlib import closing
 """Bounded database queries for the downloaded-game library.
 
 Insight aggregation remains separate; listing games never transfers review JSON
@@ -29,7 +30,7 @@ class GameLibrary:
         if reviewed is not None:
             where.append('reviewed=?')
             params.append(int(reviewed))
-        with self.profile.connect() as db:
+        with closing(self.profile.connect()) as db, db:
             db.row_factory = sqlite3.Row
             db.create_function('casefold',1,lambda value:str(value or '').casefold(),deterministic=True)
             db.create_function('opening_search',1,lambda value:chesscom_opening_label(value).casefold(),deterministic=True)
@@ -48,7 +49,7 @@ class GameLibrary:
         return records,total,page
 
     def get(self, game_id):
-        with self.profile.connect() as db:
+        with closing(self.profile.connect()) as db, db:
             db.row_factory = sqlite3.Row
             row = db.execute('SELECT * FROM chesscom_games WHERE game_id=?',(game_id,)).fetchone()
         return dict(row) if row else None

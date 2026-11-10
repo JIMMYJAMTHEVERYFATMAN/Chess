@@ -1,3 +1,4 @@
+from contextlib import closing
 """Benchmark rich reviewed libraries in a disposable SQLite database."""
 import argparse
 import json
@@ -20,7 +21,7 @@ def main():
         store=ProfileStore()
         # Synthetic 100-ply reviews with realistic repeated per-move annotations.
         review=json.dumps({'version':14,'moves':[{'ply':i,'san':'e4','theme':'Fork','explanation':'Compare the forcing continuation. '*5} for i in range(100)]})
-        with store.connect() as db:
+        with closing(store.connect()) as db, db:
             db.executemany('''INSERT INTO chesscom_games(game_id,username,played_at,result,user_color,
                 opponent,time_control,time_class,rated,rules,opening,pgn_path,reviewed,review_json)
                 VALUES(?, 'benchmark', '2026-01-01', '1-0','White','Opponent','600','rapid',1,'chess','Bird Opening','',1,?)''',
