@@ -10,6 +10,8 @@ from PyQt6.QtWidgets import (
     QGraphicsDropShadowEffect,
 )
 from PyQt6.QtGui import QColor
+from .board import ChessBoard
+from ..training import TrainingStore
 
 
 class _OpeningPerformanceWorker(QThread):
@@ -42,6 +44,7 @@ class OpeningTrainerPage(QWidget):
         self.lines = []
         self.practice_line = None
         self.practice_ply = 0
+        self.practice_failed = False
         self.practice_board = chess.Board()
         self.practice_active = False
         self.last_reply = ""
@@ -119,6 +122,12 @@ class OpeningTrainerPage(QWidget):
         self.prompt.setObjectName("ReviewSummary")
         self.prompt.setWordWrap(True)
         practice_layout.addWidget(self.prompt)
+        self.practice_widget = ChessBoard()
+        self.practice_widget.setMinimumSize(240,240)
+        self.practice_widget.setMaximumHeight(300)
+        self.practice_widget.square_clicked.connect(self._board_answer)
+        self.practice_selected = None
+        practice_layout.addWidget(self.practice_widget)
         self.answers = QGridLayout()
         practice_layout.addLayout(self.answers)
         row = QHBoxLayout()
@@ -378,6 +387,7 @@ class OpeningTrainerPage(QWidget):
         if 0 <= selected < len(options):
             self.practice_line = options[selected]
         self.practice_ply = 0
+        self.practice_failed = False
         self.practice_board = chess.Board()
         self.last_reply = ""
         self.practice_active = True
@@ -392,6 +402,7 @@ class OpeningTrainerPage(QWidget):
         self._clear_answers()
         if not self.practice_active or self.practice_ply >= len(self.practice_line.sans):
             self.practice_active = False
+            self.practice_widget.set_position(self.practice_board)
             self.prompt.setText("Line complete. Choose another line or repeat this opening to build recall.")
             return
         color = chess.WHITE if self.practice_ply % 2 == 0 else chess.BLACK
@@ -402,28 +413,41 @@ class OpeningTrainerPage(QWidget):
             self.last_reply = san
             self._next_practice_move()
             return
-        choices = {san}
-        # Include legal alternatives from sibling lines, plus plausible legal moves as distractors.
-        for op in self.lines:
-            if op.name == self.practice_line.name and len(op.sans) > self.practice_ply:
-                candidate = op.sans[self.practice_ply]
-                try:
-                    if self.practice_board.parse_san(candidate) in self.practice_board.legal_moves: choices.add(candidate)
-                except ValueError: pass
-        legal_sans = [self.practice_board.san(move) for move in self.practice_board.legal_moves]
-        import random
-        distractors = [move for move in legal_sans if move not in choices]
-        random.shuffle(distractors)
-        choices.update(distractors[:max(0, 4 - len(choices))])
+        self.practice_failed = False
+        self.practice_selected = None
+        self.practice_widget.flipped = self.side.currentData() == chess.BLACK
+        self.practice_widget.set_position(self.practice_board)
+        self.practice_card = None
+        if self.profile_store:
+            self.practice_card = TrainingStore(self.profile_store).add(
+                self.practice_board.fen(), [self.practice_board.parse_san(san)],
+                "Opening recall", self.practice_line.name)
         prefix = f"Opponent replied {self.last_reply}.  " if self.last_reply else ""
         self.prompt.setText(f"{prefix}Your move as {'White' if color else 'Black'} · {self.practice_board.fullmove_number}…")
-        for i, choice in enumerate(sorted(choices)):
-            button = QPushButton(choice)
-            button.clicked.connect(lambda checked=False, answer=choice: self._answer(answer, san))
-            self.answers.addWidget(button, i // 4, i % 4)
+        hint = QPushButton("Show repertoire move")
+        hint.clicked.connect(lambda: self._answer("", san))
+        self.answers.addWidget(hint, 0, 0)
+
+    def _board_answer(self, square):
+        if not self.practice_active or self.practice_board.turn != self.side.currentData():
+            return
+        if self.practice_selected is None:
+            piece = self.practice_board.piece_at(square)
+            if piece and piece.color == self.practice_board.turn:
+                self.practice_selected = square
+                self.practice_widget.set_position(self.practice_board, selected=square)
+            return
+        move = chess.Move(self.practice_selected, square)
+        self.practice_selected = None
+        self.practice_widget.set_position(self.practice_board)
+        if move in self.practice_board.legal_moves:
+            self._answer(self.practice_board.san(move), self.practice_line.sans[self.practice_ply])
 
     def _answer(self, answer, correct):
+        if self.profile_store and self.practice_card and not self.practice_failed:
+            TrainingStore(self.profile_store).record(self.practice_card, answer == correct)
         if answer != correct:
+            self.practice_failed = True
             self.prompt.setText(f"Not that move. The line calls for {correct}; try again.")
             return
         self.practice_board.push_san(correct)

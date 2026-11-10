@@ -1025,6 +1025,8 @@ class ReviewAnalysisTests(unittest.TestCase):
                 item=ReviewMove(1,"e4","e4","Best","White",0,25,"e4 e5","Strong central move.",
                                 "White","Out of book",0,"Opening",94.0,chess.Move.from_uci("e2e4"))
                 class ReviewHarness:
+                    game_start_board=chess.Board()
+                    history=[chess.Move.from_uci("e2e4")]
                     profile_store=store
                     player_color=chess.WHITE
                     external_review_game_id=game_id

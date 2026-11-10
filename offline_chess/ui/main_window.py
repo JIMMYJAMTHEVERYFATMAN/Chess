@@ -60,6 +60,8 @@ from .profile_dialog import ProfileDialog
 from .review_dialogs import *
 from .position_lab import PositionAnalysisPage
 from .opening_trainer import OpeningTrainerPage
+from .training_page import TrainingPage
+from ..training import TrainingStore
 from .endgame_trainer import EndgameTrainerPage
 from .language import LanguageController
 from .theme import *
@@ -380,6 +382,8 @@ class ChessWindow(QMainWindow):
         self.coach_puzzles_btn=self._button("Open puzzle studio","secondary");self.coach_puzzles_btn.clicked.connect(self.open_puzzles);coach_col.addWidget(self.coach_puzzles_btn);self.mode_stack.addWidget(coach_page)
         splitter.addWidget(panel); splitter.setSizes([1660,820])
         self.main_tabs.addTab(game_page,"Game")
+        self.training_page=TrainingPage(self.profile_store)
+        self.main_tabs.addTab(self.training_page,"Train today")
         self.position_lab=PositionAnalysisPage()
         self.position_lab.analysis_requested.connect(self.position_analysis_request.emit)
         self.main_tabs.addTab(self.position_lab,"Position Lab")
@@ -1500,6 +1504,7 @@ class ChessWindow(QMainWindow):
         try:
             side="White" if self.player_color==chess.WHITE else "Black"
             user_moves=[m for m in items if m.side==side]
+            TrainingStore(self.profile_store).add_review(self.game_start_board,self.history,items,self.player_color)
             if self.external_review_game_id:
                 user_acc=review_accuracy(user_moves)
                 profile_stats=self._review_stats(user_moves)
@@ -1693,6 +1698,8 @@ class ChessWindow(QMainWindow):
             if page is not None:
                 widget=page
                 self._show_tab_loading(widget,index)
+        elif widget is self.training_page:
+            widget.refresh()
         elif widget is self.opening_trainer:
             widget.refresh()
         elif widget is self.profile_page and self.profile_page is not None:
