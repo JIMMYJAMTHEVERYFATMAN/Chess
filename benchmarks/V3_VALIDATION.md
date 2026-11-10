@@ -1,4 +1,4 @@
-# v3.0.0 validation
+# v3.0.0.0 validation
 
 The three upgrade paths were implemented in order: daily training, bot practice/evaluation, then library queries and PR checks. This release does not claim the unfinished historical bot calibration goal is complete.
 
