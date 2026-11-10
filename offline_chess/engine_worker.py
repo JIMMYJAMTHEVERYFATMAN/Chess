@@ -20,33 +20,7 @@ from .config import MAX_ELO, MIN_ELO, MIN_TARGET_ELO, STOCKFISH_PATH
 from .openings import position_key
 from .review_logic import *
 
-def _choose_sub_1320_candidate(board,candidates,elo):
-    """Add target-sensitive, evaluation-aware mistakes to Stockfish's candidate choices."""
-    softness=max(0.0,min(1.0,(MIN_ELO-int(elo))/(MIN_ELO-MIN_TARGET_ELO)))
-    scored_moves=[]
-    for candidate in candidates:
-        pv=candidate.get("pv",[]);score=candidate.get("score")
-        if not pv or pv[0] not in board.legal_moves or score is None:continue
-        if any(existing==pv[0] for existing,_value in scored_moves):continue
-        value=score.pov(board.turn).score(mate_score=100_000)
-        if value is not None:scored_moves.append((pv[0],value))
-    if not scored_moves:return None
-    scored_moves.sort(key=lambda item:item[1],reverse=True)
-    best_score=scored_moves[0][1]
-    base_temperature=300+200*softness**1.4
-    calibration_blend=softness
-    check_scale=.55 if board.is_check() else 1.0
-    legacy_rank_power=1.2-.4*softness
-    # Mix normalized distributions so the rating curve stays smooth near both ends.
-    legacy_weights=[];human_weights=[]
-    for index,(_candidate,value) in enumerate(scored_moves):
-        rank=index+1;gap=min(100_000,best_score-value)
-        legacy_weights.append(rank**(-legacy_rank_power)*math.exp(-gap/(base_temperature*check_scale)))
-        human_weights.append(rank**(-.2)*math.exp(-gap/(10_000_000*check_scale)))
-    legacy_total=sum(legacy_weights);human_total=sum(human_weights)
-    weights=[(1-calibration_blend)*legacy/legacy_total+calibration_blend*human/human_total
-             for legacy,human in zip(legacy_weights,human_weights)]
-    return random.choices([candidate for candidate,_value in scored_moves],weights=weights,k=1)[0]
+from .bot_policy import choose_candidate as _choose_sub_1320_candidate
 
 class EngineWorker(QObject):
     ready = pyqtSignal(dict)
@@ -74,6 +48,7 @@ class EngineWorker(QObject):
         self.syzygy_path=syzygy_path
         self.syzygy_active=False
         self._elo = MIN_ELO
+        self._bot_style = "balanced"
         self._uci_elo_min = MIN_ELO
         self._uci_elo_max = MAX_ELO
         self._multipv_max = 16
@@ -164,14 +139,19 @@ class EngineWorker(QObject):
                 if options:self.engine.configure(options)
         except Exception as exc: self.operation_error.emit(str(exc))
 
+    @pyqtSlot(str)
+    def set_bot_style(self, style):
+        if style in ("balanced", "attacking", "solid"):
+            self._bot_style = style
+
     @pyqtSlot(object)
     def play_bot(self, task):
         try:
             if not self.engine: raise RuntimeError("Stockfish has not started")
             version, board = task
             duration = .35 if self._elo < 2000 else .65
-            if self._elo < MIN_ELO:
-                softness=(MIN_ELO-self._elo)/(MIN_ELO-MIN_TARGET_ELO)
+            if self._elo < MIN_ELO or self._bot_style != "balanced":
+                softness=max(0,(MIN_ELO-self._elo)/(MIN_ELO-MIN_TARGET_ELO))
                 legal_count=board.legal_moves.count()
                 complexity=1+min(.25,max(0,legal_count-20)/160)
                 duration=(.35+.12*softness)*random.uniform(.8,1.2)*complexity
@@ -180,7 +160,7 @@ class EngineWorker(QObject):
                 if "MultiPV" in self.option_names:
                     candidates=self.engine.analyse(board,chess.engine.Limit(time=duration),multipv=multipv_count)
                     if isinstance(candidates,dict):candidates=[candidates]
-                    move=_choose_sub_1320_candidate(board,candidates,self._elo)
+                    move=_choose_sub_1320_candidate(board,candidates,self._elo,self._bot_style)
                 if move is None:
                     move=self.engine.play(board,chess.engine.Limit(time=duration)).move
             else:

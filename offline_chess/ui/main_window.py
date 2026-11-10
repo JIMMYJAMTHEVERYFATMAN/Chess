@@ -62,6 +62,7 @@ from .position_lab import PositionAnalysisPage
 from .opening_trainer import OpeningTrainerPage
 from .training_page import TrainingPage
 from ..training import TrainingStore
+from ..bot_policy import adaptive_target
 from .endgame_trainer import EndgameTrainerPage
 from .language import LanguageController
 from .theme import *
@@ -92,6 +93,7 @@ class ChessWindow(QMainWindow):
     review_request = pyqtSignal(object)
     practice_analysis_request = pyqtSignal(object)
     elo_request = pyqtSignal(int)
+    bot_style_request = pyqtSignal(str)
     shutdown_request = pyqtSignal()
     evaluation_request = pyqtSignal(object)
     openings_loaded = pyqtSignal(object, object)
@@ -246,6 +248,7 @@ class ChessWindow(QMainWindow):
     def _setup_engine(self):
         self.thread = QThread(self); self.worker = EngineWorker(self.syzygy_path); self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.start_engine)
+        self.bot_style_request.connect(self.worker.set_bot_style)
         self.elo_request.connect(self.worker.set_elo); self.bot_request.connect(self.worker.play_bot)
         self.best_request.connect(self.worker.find_best); self.review_request.connect(self.worker.review_game)
         self.practice_analysis_request.connect(self.worker.analyze_practice_attempt)
@@ -327,6 +330,19 @@ class ChessWindow(QMainWindow):
         elo_row=QHBoxLayout();elo_title=QLabel("Opponent strength");elo_title.setObjectName("PlayerName");self.elo_value=QLabel("1320");self.elo_value.setObjectName("AccentText");elo_row.addWidget(elo_title);elo_row.addStretch();elo_row.addWidget(self.elo_value);setup_col.addLayout(elo_row)
         self.elo_slider=QSlider(Qt.Orientation.Horizontal);self.elo_slider.setRange(MIN_TARGET_ELO,MAX_ELO);self.elo_slider.setValue(MIN_ELO);self.elo_slider.setSingleStep(10);self.elo_slider.setToolTip("Below Stockfish's 1320 UCI minimum, weaker moves are selected to approximate the requested strength.");self.elo_slider.valueChanged.connect(self.change_elo);setup_col.addWidget(self.elo_slider)
         elo_marks=QHBoxLayout();elo_marks.addWidget(self._small("400 · approximate"));elo_marks.addStretch();elo_marks.addWidget(self._small("2200"));elo_marks.addStretch();elo_marks.addWidget(self._small("3190"));setup_col.addLayout(elo_marks)
+        style_row=QHBoxLayout()
+        style_row.addWidget(QLabel("Opponent style"))
+        self.bot_style=QComboBox()
+        for label,key in (("Balanced","balanced"),("Attacking","attacking"),("Solid","solid")):
+            self.bot_style.addItem(label,key)
+        self.bot_style.currentIndexChanged.connect(lambda: self.bot_style_request.emit(self.bot_style.currentData()))
+        style_row.addWidget(self.bot_style)
+        self.adaptive_bot=QCheckBox("Adjust strength after completed games")
+        self.adaptive_bot.setToolTip("On New game: +50 after a win, −50 after a loss, unchanged after a draw. Abandoned or imported games do not count.")
+        style_row.addWidget(self.adaptive_bot)
+        setup_col.addLayout(style_row)
+        estimate=QLabel("Bot ratings are approximate; playing style also affects strength.")
+        estimate.setWordWrap(True);estimate.setObjectName("Muted");setup_col.addWidget(estimate)
         foot=QHBoxLayout();foot.addStretch();self.flip_btn=self._button("Flip board","secondary");self.flip_btn.clicked.connect(self.flip_board);foot.addWidget(self.flip_btn);setup_col.addLayout(foot);play_col.addWidget(setup)
         self.mode_stack.addWidget(play_page)
 
@@ -1888,6 +1904,11 @@ class ChessWindow(QMainWindow):
         self.last_move=self.history[-1] if self.history else None; self.review_moves=[]; self.review_index=len(self.history)
         self._reset_review_surfaces("Review this game to refresh its analysis.");self._render_history(); self._sync_board(); self._after_move(); self._update_opening()
     def reset(self):
+        if self.adaptive_bot.isChecked() and self.rating_eligible and self._game_finished():
+            result=self.game_result_override or self.board.result()
+            if result in ("1-0","0-1","1/2-1/2"):
+                score=.5 if result=="1/2-1/2" else float(result==("1-0" if self.player_color else "0-1"))
+                self.elo_slider.setValue(adaptive_target(self.elo_slider.value(),score))
         self._stop_review_playback()
         self.review_token+=1; self.worker.review_cancel_event.set(); self.review_busy=False; self.review_btn.setText("Review Game");self.analysis_level.setEnabled(True);self._update_syzygy_button()
         self.external_review_game_id=None;self.external_review_username=None;self.external_review_players={};self.external_review_ratings={};self.external_review_clocks=[]

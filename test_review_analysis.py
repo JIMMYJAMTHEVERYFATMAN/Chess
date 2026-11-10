@@ -311,6 +311,7 @@ class ReviewAnalysisTests(unittest.TestCase):
         app=QApplication.instance() or QApplication([])
         move_table=QTableWidget(1,3);review_table=QTableWidget(1,5)
         target=SimpleNamespace(
+            adaptive_bot=SimpleNamespace(isChecked=lambda:False),
             review_token=0,worker=SimpleNamespace(review_cancel_event=threading.Event()),review_busy=False,
             review_btn=MagicMock(),analysis_level=MagicMock(),_update_syzygy_button=MagicMock(),
             external_review_game_id=None,external_review_username=None,external_review_players={},
@@ -429,7 +430,8 @@ class ReviewAnalysisTests(unittest.TestCase):
             def showMessage(self,message,*_args):self.message=message
         def make_target():
             return SimpleNamespace(
-                review_token=0,worker=SimpleNamespace(review_cancel_event=threading.Event()),review_busy=False,
+                adaptive_bot=SimpleNamespace(isChecked=lambda:False),
+            review_token=0,worker=SimpleNamespace(review_cancel_event=threading.Event()),review_busy=False,
                 review_btn=MagicMock(),analysis_level=MagicMock(),_update_syzygy_button=MagicMock(),
                 external_review_game_id="old",external_review_username="old",external_review_players={"old":"old"},
                 external_review_ratings={"old":1000},external_review_clocks=[1],game_version=0,
